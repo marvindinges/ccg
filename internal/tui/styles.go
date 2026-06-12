@@ -14,15 +14,16 @@ type styles struct {
 	secondary color.Color   // configurable accent (keys, selectors, spinner head)
 	shimmer   []color.Color // loading-sweep colors, derived from the accents
 
-	logo     lipgloss.Style // "ccg" badge
-	stage    lipgloss.Style // current-step badge
-	subtle   lipgloss.Style
-	errBox   lipgloss.Style
-	warnBox  lipgloss.Style
-	success  lipgloss.Style
-	spin     lipgloss.Style
-	preview  lipgloss.Style
-	previewT lipgloss.Style
+	logo       lipgloss.Style // "ccg" badge
+	stage      lipgloss.Style // current-step badge
+	subtle     lipgloss.Style
+	errBox     lipgloss.Style
+	warnBox    lipgloss.Style
+	success    lipgloss.Style
+	spin       lipgloss.Style
+	preview    lipgloss.Style
+	previewT   lipgloss.Style
+	modalTitle lipgloss.Style
 }
 
 // Fixed semantic colors (not user-configurable). White is the terminal's bright
@@ -33,6 +34,12 @@ var (
 	colRed   = lipgloss.Color("203")
 	colYell  = lipgloss.Color("221")
 	colDim   = lipgloss.Color("240")
+
+	// Footer bar (keybinding hints). A solid background keeps the hints readable
+	// on transparent terminals; brighter text than the dim default for contrast.
+	colFooterBg  = lipgloss.Color("236")
+	colFooterFg  = lipgloss.Color("252")
+	colFooterDim = lipgloss.Color("245")
 )
 
 // ansiNames maps terminal color names to ANSI palette indices, so a config of
@@ -83,7 +90,8 @@ func newStyles(primary, secondary color.Color) styles {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(primary).
 			Padding(0, 1),
-		previewT: lipgloss.NewStyle().Foreground(primary).Bold(true),
+		previewT:   lipgloss.NewStyle().Foreground(primary).Bold(true),
+		modalTitle: lipgloss.NewStyle().Foreground(colRed).Bold(true),
 	}
 }
 
@@ -120,15 +128,29 @@ func (s styles) loading(frame int, label string) string {
 	return sp + " " + b.String() + dim.Render(dots)
 }
 
-// key renders a keybinding hint like "[t] type" with the key emphasized.
+// key renders one "[t] type" keybinding chip with the footer background, so the
+// whole footer reads as a solid bar even on a transparent terminal.
 func (s styles) key(k, label string) string {
-	cap := lipgloss.NewStyle().Foreground(s.secondary).Bold(true).Render(k)
-	return s.subtle.Render("[") + cap + s.subtle.Render("] ") + s.subtle.Render(label)
+	keySt := lipgloss.NewStyle().Foreground(s.secondary).Bold(true).Background(colFooterBg)
+	brk := lipgloss.NewStyle().Foreground(colFooterDim).Background(colFooterBg)
+	lbl := lipgloss.NewStyle().Foreground(colFooterFg).Background(colFooterBg)
+	return brk.Render("[") + keySt.Render(k) + brk.Render("] ") + lbl.Render(label)
 }
 
-// hints renders a form's active keybindings in the same "[KEY] text" style as
-// the review hub, so help looks identical across every stage. Bindings without
-// help text or that are disabled are skipped; duplicates are de-duplicated.
+// footerBar joins keybinding chips into a single background bar (with padding),
+// so the separators and edges share the chips' background.
+func (s styles) footerBar(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	sep := lipgloss.NewStyle().Background(colFooterBg).Render("  ")
+	line := strings.Join(parts, sep)
+	return lipgloss.NewStyle().Background(colFooterBg).Padding(0, 1).Render(line)
+}
+
+// hints renders a form's active keybindings as a footer bar in the same
+// "[KEY] text" style as the review hub. Bindings without help text or that are
+// disabled are skipped; duplicates are de-duplicated.
 func (s styles) hints(bindings []key.Binding) string {
 	seen := map[string]bool{}
 	var parts []string
@@ -143,7 +165,29 @@ func (s styles) hints(bindings []key.Binding) string {
 		seen[h.Key] = true
 		parts = append(parts, s.key(h.Key, h.Desc))
 	}
-	return strings.Join(parts, "  ")
+	return s.footerBar(parts)
+}
+
+// modal renders body inside a bordered panel centered over a width×height area —
+// a simple overlay used for AI errors so long messages wrap and stay readable.
+func (s styles) modal(width, height int, body string) string {
+	boxWidth := 64
+	if width > 0 && width-8 < boxWidth {
+		boxWidth = width - 8
+	}
+	if boxWidth < 24 {
+		boxWidth = 24
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colRed).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(body)
+	if width <= 0 || height <= 0 {
+		return box
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // header renders two badges: the "ccg" mark and the current step, styled
