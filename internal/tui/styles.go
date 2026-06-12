@@ -4,13 +4,14 @@ import (
 	"image/color"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 )
 
 type styles struct {
-	logo     lipgloss.Style
-	tagline  lipgloss.Style
-	step     lipgloss.Style
+	logo     lipgloss.Style // "ccg" badge
+	stage    lipgloss.Style // current-step badge
 	subtle   lipgloss.Style
 	errBox   lipgloss.Style
 	warnBox  lipgloss.Style
@@ -27,7 +28,6 @@ var (
 	colGreen = lipgloss.Color("42")
 	colRed   = lipgloss.Color("203")
 	colYell  = lipgloss.Color("221")
-	colGray  = lipgloss.Color("245")
 	colDim   = lipgloss.Color("240")
 )
 
@@ -38,9 +38,12 @@ func newStyles() styles {
 			Foreground(lipgloss.Color("231")).
 			Background(colMauve).
 			Padding(0, 1),
-		tagline: lipgloss.NewStyle().Foreground(colGray).Italic(true),
-		step:    lipgloss.NewStyle().Bold(true).Foreground(colPink),
-		subtle:  lipgloss.NewStyle().Foreground(colDim),
+		stage: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("231")).
+			Background(colPink).
+			Padding(0, 1),
+		subtle: lipgloss.NewStyle().Foreground(colDim),
 		errBox: lipgloss.NewStyle().
 			Foreground(colRed).Bold(true).
 			Border(lipgloss.RoundedBorder(), false, false, false, true).
@@ -109,11 +112,48 @@ func (s styles) key(k, label string) string {
 	return s.subtle.Render("[") + cap + s.subtle.Render("] ") + s.subtle.Render(label)
 }
 
-// header renders the branded title line plus a contextual step label.
-func (s styles) header(stepLabel string) string {
-	line := s.logo.Render("ccg") + "  " + s.tagline.Render("conventional commits")
-	if stepLabel != "" {
-		line += "  " + s.subtle.Render("·") + "  " + s.step.Render(stepLabel)
+// hints renders a form's active keybindings in the same "[KEY] text" style as
+// the review hub, so help looks identical across every stage. Bindings without
+// help text or that are disabled are skipped; duplicates are de-duplicated.
+func (s styles) hints(bindings []key.Binding) string {
+	seen := map[string]bool{}
+	var parts []string
+	for _, b := range bindings {
+		if !b.Enabled() {
+			continue
+		}
+		h := b.Help()
+		if h.Key == "" || seen[h.Key] {
+			continue
+		}
+		seen[h.Key] = true
+		parts = append(parts, s.key(h.Key, h.Desc))
 	}
-	return line
+	return strings.Join(parts, "  ")
+}
+
+// header renders two badges: the "ccg" mark and the current step, styled
+// alike (bold light text on a colored background) but in different colors.
+func (s styles) header(stepLabel string) string {
+	out := s.logo.Render("ccg")
+	if stepLabel != "" {
+		out += " " + s.stage.Render(stepLabel)
+	}
+	return out
+}
+
+// ccgTheme is huh's Charm theme with the form's keybinding help recolored to
+// match the review hub's hints (pink keys, dim labels).
+func ccgTheme(isDark bool) *huh.Styles {
+	s := huh.ThemeCharm(isDark)
+	keyStyle := lipgloss.NewStyle().Foreground(colPink).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colDim)
+	s.Help.ShortKey = s.Help.ShortKey.Foreground(colPink).Bold(true)
+	s.Help.ShortDesc = s.Help.ShortDesc.Foreground(colDim)
+	s.Help.ShortSeparator = s.Help.ShortSeparator.Foreground(colDim)
+	s.Help.FullKey = keyStyle
+	s.Help.FullDesc = descStyle
+	s.Help.FullSeparator = descStyle
+	s.Help.Ellipsis = descStyle
+	return s
 }

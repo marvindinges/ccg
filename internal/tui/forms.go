@@ -23,10 +23,12 @@ func formWidth(termWidth int) int {
 
 // styleForm applies the shared theme, width and help styling to a form.
 func styleForm(f *huh.Form, termWidth int) *huh.Form {
+	// huh's built-in help is disabled; we render our own hint line (styles.hints)
+	// so it matches the review hub's "[KEY] text" format on every stage.
 	return f.
-		WithTheme(huh.ThemeFunc(huh.ThemeCharm)).
+		WithTheme(huh.ThemeFunc(ccgTheme)).
 		WithWidth(formWidth(termWidth)).
-		WithShowHelp(true)
+		WithShowHelp(false)
 }
 
 // Form field keys.

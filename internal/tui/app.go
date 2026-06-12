@@ -485,6 +485,9 @@ func (m Model) View() tea.View {
 	default:
 		if m.form != nil {
 			b.WriteString(m.form.View())
+			if hints := m.styles.hints(m.form.KeyBinds()); hints != "" {
+				b.WriteString("\n\n" + hints)
+			}
 		}
 	}
 
