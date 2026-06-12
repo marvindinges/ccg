@@ -15,12 +15,57 @@ written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 a
 
 ## Install
 
-Requires Go 1.23+ and `git` on `PATH`.
+### Quick install (recommended)
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/marvindinges/ccg/main/install.sh | sh
+```
+
+The installer clones the repo and builds it locally, **asking before each system change**:
+
+- installs the Go toolchain if it's missing or older than 1.21 (no sudo, into `~/.local/go`),
+- clones the source into `~/.local/share/ccg/src` and builds `ccg` into `~/.local/bin`,
+- adds the needed dirs to your `PATH` for **bash, zsh, and fish**,
+- optionally creates a global config at `~/.config/ccg/config.yaml`.
+
+The source checkout is kept so `ccg upgrade` can rebuild from it later.
+
+It prints exactly what it will do and prompts for confirmation; in a non-interactive
+shell it does nothing unless you pass `CCG_ASSUME_YES=1`.
+
+```sh
+# non-interactive (answers yes to everything):
+curl -fsSL https://raw.githubusercontent.com/marvindinges/ccg/main/install.sh | CCG_ASSUME_YES=1 sh
+```
+
+Useful environment knobs: `CCG_INSTALL_DIR`, `CCG_REF` (branch/tag/commit to
+build), `CCG_SRC_DIR`, `CCG_REPO_URL`, `CCG_GO_DIR`, `CCG_SKIP_PATH=1`,
+`CCG_SKIP_CONFIG=1`, and `CCG_PROVIDER_BASE_URL` / `CCG_PROVIDER_MODEL` /
+`CCG_PROVIDER_API_KEY_ENV` to pre-fill the config.
+
+> The `curl | sh` URL only resolves once the repo is public. Until then (or to
+> install offline), clone it and build from the checkout:
+> `git clone … && cd ccg && CCG_SOURCE_DIR=$PWD sh install.sh`
+
+### Upgrade
+
+```sh
+ccg upgrade            # pull the latest source and rebuild
+ccg upgrade v0.2.0     # build a specific tag/branch/commit
+```
+
+`ccg upgrade` reuses the source checkout from the installer (`~/.local/share/ccg/src`),
+rebuilds, and replaces the current binary. Re-running the install script does the
+same thing. (If ccg was installed another way, re-run the install command above.)
+
+### Manual install
+
+Requires Go 1.21+ (the toolchain auto-fetches the version pinned in `go.mod`) and `git`.
+
+```sh
+git clone https://github.com/marvindinges/ccg.git && cd ccg
 go build -o ccg .
-# or install onto your PATH:
-go install github.com/marvindinges/ccg@latest
+# move ./ccg onto your PATH, e.g. into ~/.local/bin
 ```
 
 ## Usage
@@ -48,6 +93,7 @@ Subcommands:
 ```sh
 ccg config        # show resolved config and where each value came from
 ccg config path   # print the global and project config file paths
+ccg upgrade       # pull the latest source and rebuild (see Upgrade below)
 ccg version
 ```
 
