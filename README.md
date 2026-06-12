@@ -1,7 +1,7 @@
 # ccg
 
 An interactive TUI for writing [Conventional Commits](https://www.conventionalcommits.org/),
-with **optional** AI message generation. Inspired by [`mainrs/git-cm`](https://github.com/mainrs/git-cm),
+with **optional** AI generation.
 written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 and
 [huh](https://github.com/charmbracelet/huh).
 
@@ -9,12 +9,9 @@ written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 a
   review & edit every segment → confirm → (optional) push.
 - **You always verify.** AI output is never committed without you reviewing and
   editing it in the form first.
-- **Works with no AI at all.** With no provider configured, ccg is a fully manual
-  guided Conventional Commits tool (the git-cm experience).
-- **Bring your own provider.** A single OpenAI-compatible client works with OpenAI,
-  OpenRouter, Groq, LM Studio, llama.cpp, Ollama, and anything else that speaks the
-  `/chat/completions` API — configurable **per project**.
-- Runs on WSL (Debian 12+) and Linux; cross-compiles to Windows. No CGO.
+- **Works with no AI at all (manual).** With no provider configured, ccg is a fully manual
+  guided Conventional Commits tool.
+- **Bring your own provider.** works with `/chat/completions` API — configurable **per project**.
 
 ## Install
 
@@ -100,20 +97,6 @@ commit:
       description: Infrastructure / Terraform changes
 ```
 
-### Provider examples
-
-| Provider | `base_url` | Notes |
-|----------|-----------|-------|
-| OpenAI | `https://api.openai.com/v1` | |
-| OpenRouter | `https://openrouter.ai/api/v1` | `model` like `anthropic/claude-3.5-haiku` |
-| Groq | `https://api.groq.com/openai/v1` | note the extra `/openai` |
-| LM Studio | `http://localhost:1234/v1` | `api_key_env` can be omitted |
-| llama.cpp server | `http://localhost:8080/v1` | `api_key_env` can be omitted |
-| Ollama | `http://localhost:11434/v1` | `api_key_env` can be omitted |
-
-For local servers that don't need a key, leave `api_key_env` unset — ccg sends a
-placeholder.
-
 ### Environment overrides
 
 `CCG_BASE_URL`, `CCG_MODEL`, `CCG_API_KEY_ENV`, `CCG_STRICT_SCHEMA` override the
@@ -127,27 +110,6 @@ object describing the commit. The response is parsed defensively (code fences an
 surrounding prose are tolerated); if parsing or the request fails, the workflow
 degrades gracefully to manual editing rather than aborting. The draft always lands
 in the editable review form before anything is committed.
-
-## Troubleshooting
-
-If AI generation doesn't work (and you fall through to manual editing), run:
-
-```sh
-ccg --debug
-```
-
-This prints the resolved provider config — crucially **whether the API key
-environment variable actually resolved to a value in ccg's environment** — and
-logs the full request URL, the response status, and the response body. The two
-most common causes:
-
-1. **The key env var isn't exported where ccg runs.** `ccg config` / `ccg --debug`
-   will show `$YOUR_KEY is EMPTY/unset`. Export it (e.g. in your shell profile)
-   so the process ccg runs in can see it.
-2. **The provider rejects `response_format`.** Some OpenAI-compatible endpoints
-   don't support it. ccg automatically retries once without `response_format`
-   (the debug log shows the retry), so this usually self-heals; set
-   `strict_schema: false` (the default) to stay in the broadly-compatible mode.
 
 ## Development
 
