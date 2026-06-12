@@ -1,6 +1,11 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"image/color"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 type styles struct {
 	logo     lipgloss.Style
@@ -52,6 +57,50 @@ func newStyles() styles {
 			Padding(0, 1),
 		previewT: lipgloss.NewStyle().Foreground(colMauve).Bold(true),
 	}
+}
+
+// brailleFrames drives the spinner glyph.
+var brailleFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+// shimmerColors are the bright-to-trailing colors swept across the label.
+var shimmerColors = []color.Color{
+	lipgloss.Color("231"), // brightest (head)
+	lipgloss.Color("225"),
+	lipgloss.Color("213"),
+	lipgloss.Color("212"),
+	lipgloss.Color("141"),
+	lipgloss.Color("98"),
+}
+
+// loading renders an animated loader: a cycling braille spinner followed by the
+// label with a bright highlight that sweeps across it (a shimmer/wave effect).
+// frame is a monotonically increasing tick counter.
+func (s styles) loading(frame int, label string) string {
+	sp := lipgloss.NewStyle().Foreground(colPink).Bold(true).
+		Render(string(brailleFrames[frame%len(brailleFrames)]))
+
+	runes := []rune(label)
+	// The bright head travels across the label and a trailing gap, then loops.
+	span := len(runes) + len(shimmerColors) + 4
+	head := frame % span
+
+	dim := lipgloss.NewStyle().Foreground(colDim)
+	var b strings.Builder
+	for i, r := range runes {
+		d := head - i // distance behind the moving head
+		if d >= 0 && d < len(shimmerColors) {
+			st := lipgloss.NewStyle().Foreground(shimmerColors[d])
+			if d == 0 {
+				st = st.Bold(true)
+			}
+			b.WriteString(st.Render(string(r)))
+		} else {
+			b.WriteString(dim.Render(string(r)))
+		}
+	}
+	// Animated trailing dots.
+	dots := strings.Repeat(".", frame%4)
+	return sp + " " + b.String() + dim.Render(dots)
 }
 
 // header renders the branded title line plus a contextual step label.

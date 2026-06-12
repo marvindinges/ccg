@@ -2,11 +2,20 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marvindinges/ccg/internal/ai"
 	"github.com/marvindinges/ccg/internal/commit"
 )
+
+// animInterval is the loading-animation frame interval.
+const animInterval = 90 * time.Millisecond
+
+// tickAnim schedules the next animation frame.
+func tickAnim() tea.Cmd {
+	return tea.Tick(animInterval, func(time.Time) tea.Msg { return animMsg{} })
+}
 
 // loadStatus fetches the working-tree status.
 func loadStatus(g gitRunner) tea.Cmd {

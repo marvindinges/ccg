@@ -98,7 +98,7 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 		Key(keyType).
 		Title("Type").
 		Options(typeOpts...).
-		Height(7).
+		Height(6).
 		Value(&typeVal)
 
 	scope := huh.NewInput().
@@ -144,7 +144,14 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 		Lines(2).
 		Value(&footersVal)
 
-	return huh.NewForm(huh.NewGroup(typeSel, scope, breaking, desc, body, footers))
+	// Paginate the review across short groups instead of one tall page: huh shows
+	// one group at a time, so the screen stays compact. enter advances within and
+	// between groups; shift+tab goes back.
+	return huh.NewForm(
+		huh.NewGroup(typeSel).Title("Type"),
+		huh.NewGroup(scope, breaking, desc).Title("Header"),
+		huh.NewGroup(body, footers).Title("Details (optional)"),
+	)
 }
 
 // newConfirmForm asks the user to confirm creating the commit. dryRun changes

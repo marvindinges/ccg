@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"github.com/marvindinges/ccg/internal/ai"
@@ -65,9 +64,8 @@ type Options struct {
 
 // Model is the parent Bubble Tea model holding all step state.
 type Model struct {
-	opts    Options
-	styles  styles
-	spinner spinner.Model
+	opts   Options
+	styles styles
 
 	step     step
 	form     *huh.Form
@@ -79,6 +77,7 @@ type Model struct {
 
 	width  int
 	height int
+	frame  int // animation tick counter for the loading view
 
 	busyText string
 	notice   string // transient banner above a form (e.g. validation errors)
@@ -93,13 +92,12 @@ type Model struct {
 
 // New builds the initial model.
 func New(opts Options) Model {
-	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	return Model{
-		opts:    opts,
-		styles:  newStyles(),
-		spinner: sp,
-		hint:    opts.Hint,
-		step:    stepStage,
+		opts:     opts,
+		styles:   newStyles(),
+		hint:     opts.Hint,
+		step:     stepBusy,
+		busyText: "Loading changes…",
 	}
 }
 
@@ -124,8 +122,12 @@ func (m Model) Message() string         { return m.draft.Render() }
 func (m Model) Branch() (string, error) { return m.opts.Git.CurrentBranch() }
 
 func (m Model) Init() tea.Cmd {
-	m.busyText = "Loading changes…"
-	return tea.Batch(m.spinner.Tick, loadStatus(m.opts.Git))
+	return tea.Batch(tickAnim(), loadStatus(m.opts.Git))
+}
+
+// isLoading reports whether the current step shows the animated loader.
+func (m Model) isLoading() bool {
+	return m.step == stepGenerate || m.step == stepBusy
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -172,11 +174,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.step = stepError
 		return m, tea.Quit
 
-	case spinner.TickMsg:
-		if m.step == stepGenerate || m.step == stepBusy {
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			return m, cmd
+	case animMsg:
+		// Advance the loader and keep ticking only while in a loading step, so
+		// the loop self-terminates and doesn't repaint forms.
+		if m.isLoading() {
+			m.frame++
+			return m, tickAnim()
 		}
 		return m, nil
 	}
@@ -239,7 +242,7 @@ func (m Model) enterGenerate() (tea.Model, tea.Cmd) {
 		Types:        m.opts.Cfg.AllowedTypes(),
 		MaxHeaderLen: m.opts.Cfg.MaxHeaderLen(),
 	}
-	return m, tea.Batch(m.spinner.Tick, generate(m.opts.AI, in))
+	return m, tea.Batch(tickAnim(), generate(m.opts.AI, in))
 }
 
 func (m Model) enterReview() (tea.Model, tea.Cmd) {
@@ -258,7 +261,7 @@ func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 	if m.opts.AutoPush {
 		m.busyText = "Pushing…"
 		m.step = stepBusy
-		return m, tea.Batch(m.spinner.Tick, doPush(m.opts.Git))
+		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 	}
 	branch, _ := m.opts.Git.CurrentBranch()
 	m.form = styleForm(newPushForm(branch), m.width)
@@ -299,7 +302,7 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		if m.form.GetBool(keyConfirm) {
 			m.busyText = "Pushing…"
 			m.step = stepBusy
-			return m, tea.Batch(m.spinner.Tick, doPush(m.opts.Git))
+			return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 		}
 		m.step = stepDone
 		return m, tea.Quit
@@ -331,7 +334,7 @@ func (m Model) completeStage() (tea.Model, tea.Cmd) {
 
 	m.busyText = "Staging files…"
 	m.step = stepBusy
-	return m, tea.Batch(m.spinner.Tick, reconcileStage(m.opts.Git, selected, toUnstage))
+	return m, tea.Batch(tickAnim(), reconcileStage(m.opts.Git, selected, toUnstage))
 }
 
 func (m Model) completeReview() (tea.Model, tea.Cmd) {
@@ -372,7 +375,7 @@ func (m Model) completeConfirm() (tea.Model, tea.Cmd) {
 	}
 	m.busyText = "Creating commit…"
 	m.step = stepBusy
-	return m, tea.Batch(m.spinner.Tick, doCommit(m.opts.Git, m.draft))
+	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
 }
 
 func (m Model) View() tea.View {
@@ -391,9 +394,9 @@ func (m Model) View() tea.View {
 
 	switch m.step {
 	case stepGenerate:
-		b.WriteString(m.styles.spin.Render(m.spinner.View()) + " Generating commit message…")
+		b.WriteString(m.styles.loading(m.frame, "Generating commit message"))
 	case stepBusy:
-		b.WriteString(m.styles.spin.Render(m.spinner.View()) + " " + m.busyText)
+		b.WriteString(m.styles.loading(m.frame, strings.TrimRight(m.busyText, "… ")))
 	case stepError:
 		if m.err != nil {
 			b.WriteString(m.styles.errBox.Render("Error: " + m.err.Error()))

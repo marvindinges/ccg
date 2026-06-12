@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -224,6 +225,46 @@ func TestCtrlCAborts(t *testing.T) {
 	}
 }
 
+func TestAnimAdvancesWhileLoading(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, nil)
+	m.step = stepGenerate
+	out, cmd := m.Update(animMsg{})
+	got := out.(Model)
+	if got.frame != 1 {
+		t.Errorf("frame should advance while loading, got %d", got.frame)
+	}
+	if cmd == nil {
+		t.Error("expected a follow-up tick while loading")
+	}
+}
+
+func TestAnimStopsWhenNotLoading(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, nil)
+	m.step = stepReview
+	out, cmd := m.Update(animMsg{})
+	got := out.(Model)
+	if got.frame != 0 {
+		t.Errorf("frame should not advance off a loading step, got %d", got.frame)
+	}
+	if cmd != nil {
+		t.Error("tick loop should stop when not loading")
+	}
+}
+
+func TestLoadingViewAnimates(t *testing.T) {
+	s := newStyles()
+	a := s.loading(0, "Working")
+	b := s.loading(1, "Working")
+	if a == b {
+		t.Error("loading frames 0 and 1 should differ")
+	}
+	if !strings.Contains(stripANSI(a), "Working") {
+		t.Errorf("loading should contain the label, got %q", stripANSI(a))
+	}
+}
+
 func TestViewDoesNotPanicAcrossSteps(t *testing.T) {
 	g := &fakeGit{}
 	m := baseModel(g, nil)
@@ -291,6 +332,10 @@ func TestOnStagedEmptyDiffErrors(t *testing.T) {
 		t.Errorf("empty diff should error, got step=%v", got.step)
 	}
 }
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 var errTest = errTestType("boom")
 

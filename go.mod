@@ -3,7 +3,6 @@ module github.com/marvindinges/ccg
 go 1.26.4
 
 require (
-	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.3
@@ -12,6 +11,7 @@ require (
 )
 
 require (
+	charm.land/bubbles/v2 v2.1.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/catppuccin/go v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect

@@ -37,3 +37,6 @@ type pushedMsg struct {
 type errMsg struct {
 	err error
 }
+
+// animMsg drives the loading animation tick.
+type animMsg struct{}
