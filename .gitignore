@@ -1,0 +1,9 @@
+# Built binary
+/ccg
+/ccg.exe
+
+# Test/coverage artifacts
+*.out
+*.test
+
+.ccg.yaml

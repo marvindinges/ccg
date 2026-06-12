@@ -1,0 +1,241 @@
+# ccg
+
+An interactive TUI for writing [Conventional Commits](https://www.conventionalcommits.org/),
+with **optional** AI message generation. Inspired by [`mainrs/git-cm`](https://github.com/mainrs/git-cm),
+written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 and
+[huh](https://github.com/charmbracelet/huh).
+
+- **Guided commit flow:** select files → (optional) hint → (optional) AI draft →
+  review & edit every segment → confirm → (optional) push.
+- **You always verify.** AI output is never committed without you reviewing and
+  editing it in the form first.
+- **Works with no AI at all.** With no provider configured, ccg is a fully manual
+  guided Conventional Commits tool (the git-cm experience).
+- **Bring your own provider.** A single OpenAI-compatible client works with OpenAI,
+  OpenRouter, Groq, LM Studio, llama.cpp, Ollama, and anything else that speaks the
+  `/chat/completions` API — configurable **per project**.
+- Runs on WSL (Debian 12+) and Linux; cross-compiles to Windows. No CGO.
+
+## Install
+
+Requires Go 1.23+ and `git` on `PATH`.
+
+```sh
+go build -o ccg .
+# or install onto your PATH:
+go install github.com/marvindinges/ccg@latest
+```
+
+## Usage
+
+Run inside a git repository:
+
+```sh
+ccg
+```
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--no-ai` | Force manual mode even if a provider is configured |
+| `--hint "..."` | Provide the natural-language hint up front (skips the hint prompt) |
+| `--all` | Pre-select all changed files for staging |
+| `--push` | Push automatically after committing |
+| `--no-push` | Skip the push step |
+| `--dry-run` | Render the commit message and print it — don't commit |
+| `--debug` | Print the resolved config and the AI request/response (troubleshooting) |
+
+Subcommands:
+
+```sh
+ccg config        # show resolved config and where each value came from
+ccg config path   # print the global and project config file paths
+ccg version
+```
+
+### Keybindings (in the forms)
+
+- **Select files:** `space` (or `x`) to toggle, `enter` to confirm.
+- **Move between fields:** `enter` or `tab` (and `shift+tab` to go back).
+- **Multi-line body/footers:** `enter` advances to the next field; use
+  `alt+enter` (or `ctrl+j`) to insert a newline within the body.
+- **Cancel anytime:** `ctrl+c` (nothing is committed).
+
+The **Footers** field takes one trailer per line, e.g. `Refs: #123`.
+
+## Configuration
+
+YAML, with precedence **env > project `.ccg.yaml` > global config > built-in defaults**.
+
+- **Global:** `$XDG_CONFIG_HOME/ccg/config.yaml` (i.e. `~/.config/ccg/config.yaml` on WSL/Linux).
+- **Project:** `.ccg.yaml` at the repository root (commit it to share team settings).
+
+API keys are **never stored in config** — you configure the *name* of an
+environment variable, and ccg reads the key from your environment at runtime.
+
+### Example global config
+
+```yaml
+defaults: true            # include the built-in commit types
+provider:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key_env: OPENAI_API_KEY
+  strict_schema: false    # opt into json_schema strict mode for providers that support it
+commit:
+  max_header_len: 72
+```
+
+### Example project `.ccg.yaml`
+
+```yaml
+provider:
+  base_url: https://openrouter.ai/api/v1
+  model: anthropic/claude-3.5-haiku
+  api_key_env: OPENROUTER_API_KEY
+commit:
+  types:                  # custom types, merged with the defaults
+    - name: infra
+      description: Infrastructure / Terraform changes
+```
+
+### Provider examples
+
+| Provider | `base_url` | Notes |
+|----------|-----------|-------|
+| OpenAI | `https://api.openai.com/v1` | |
+| OpenRouter | `https://openrouter.ai/api/v1` | `model` like `anthropic/claude-3.5-haiku` |
+| Groq | `https://api.groq.com/openai/v1` | note the extra `/openai` |
+| LM Studio | `http://localhost:1234/v1` | `api_key_env` can be omitted |
+| llama.cpp server | `http://localhost:8080/v1` | `api_key_env` can be omitted |
+| Ollama | `http://localhost:11434/v1` | `api_key_env` can be omitted |
+
+For local servers that don't need a key, leave `api_key_env` unset — ccg sends a
+placeholder.
+
+### Environment overrides
+
+`CCG_BASE_URL`, `CCG_MODEL`, `CCG_API_KEY_ENV`, `CCG_STRICT_SCHEMA` override the
+corresponding config values for a single run.
+
+## How AI generation works
+
+ccg sends your **staged diff** (truncated to keep token cost down) plus your
+optional hint and the allowed commit types to the model, asking for a single JSON
+object describing the commit. The response is parsed defensively (code fences and
+surrounding prose are tolerated); if parsing or the request fails, the workflow
+degrades gracefully to manual editing rather than aborting. The draft always lands
+in the editable review form before anything is committed.
+
+## Troubleshooting
+
+If AI generation doesn't work (and you fall through to manual editing), run:
+
+```sh
+ccg --debug
+```
+
+This prints the resolved provider config — crucially **whether the API key
+environment variable actually resolved to a value in ccg's environment** — and
+logs the full request URL, the response status, and the response body. The two
+most common causes:
+
+1. **The key env var isn't exported where ccg runs.** `ccg config` / `ccg --debug`
+   will show `$YOUR_KEY is EMPTY/unset`. Export it (e.g. in your shell profile)
+   so the process ccg runs in can see it.
+2. **The provider rejects `response_format`.** Some OpenAI-compatible endpoints
+   don't support it. ccg automatically retries once without `response_format`
+   (the debug log shows the retry), so this usually self-heals; set
+   `strict_schema: false` (the default) to stay in the broadly-compatible mode.
+
+## Development
+
+### Prerequisites
+
+- **Go 1.23+** (developed against 1.26). Check with `go version`.
+- **git** on your `PATH` (the integration tests and the tool itself shell out to it).
+- No CGO toolchain needed — `CGO_ENABLED=0` builds work everywhere.
+
+### Project setup
+
+```sh
+git clone https://github.com/marvindinges/ccg.git
+cd ccg
+go mod download   # fetch dependencies (go build/test do this automatically too)
+```
+
+The module path is `github.com/marvindinges/ccg`. If you forked it under a different
+namespace, update it once:
+
+```sh
+go mod edit -module github.com/<you>/ccg
+grep -rl github.com/marvindinges/ccg --include='*.go' | xargs sed -i 's#github.com/marvindinges/ccg#github.com/<you>/ccg#g'
+```
+
+### Run locally
+
+```sh
+go run .                      # run without producing a binary
+go run . --no-ai              # pass flags after the dot
+go run . config               # run a subcommand
+go run . --dry-run            # build the message and print it, don't commit
+```
+
+Run it inside a git repository with uncommitted changes so there's something to stage.
+
+### Test
+
+```sh
+go test ./...                 # all unit + temp-repo integration tests
+go test -count=1 ./...        # force a re-run (bypass the test cache)
+go test -race ./...           # run with the race detector
+go test -run TestRender ./internal/commit/   # a single test / package
+go test -v ./internal/tui/    # verbose output
+```
+
+The `internal/git` tests build throwaway repositories in a temp dir and skip
+automatically if `git` isn't on `PATH`. The TUI is tested by driving the Bubble
+Tea model's `Update` with synthetic messages and injected fakes (no terminal
+required).
+
+### Test coverage
+
+```sh
+go test -cover ./...                          # per-package coverage summary
+go test -coverprofile=cov.out ./...           # write a coverage profile
+go tool cover -func=cov.out                   # per-function + total %
+go tool cover -html=cov.out                   # open an annotated HTML report
+go tool cover -html=cov.out -o coverage.html  # ...or write it to a file
+```
+
+### Lint / format
+
+```sh
+gofmt -l .        # list files needing formatting (empty = clean)
+gofmt -w .        # format in place
+go vet ./...      # static checks
+```
+
+### Build
+
+```sh
+go build -o ccg .                             # build for the current platform
+go install github.com/marvindinges/ccg@latest       # install to $(go env GOPATH)/bin
+
+# Cross-compile (CGO-free, so this just works):
+GOOS=windows GOARCH=amd64 go build -o ccg.exe .
+GOOS=linux   GOARCH=arm64 go build -o ccg-arm64 .
+
+# Embed a version string (otherwise it reports "dev"):
+go build -ldflags "-X github.com/marvindinges/ccg/internal/cmd.Version=$(git describe --tags --always)" -o ccg .
+```
+
+### Package layout
+
+- `internal/commit` — Conventional Commits domain model (render/parse/validate); pure, no deps.
+- `internal/git` — CGO-free `git` CLI wrapper (porcelain v2 status, stage, diff, commit, push).
+- `internal/config` — YAML config loading and precedence.
+- `internal/ai` — OpenAI-compatible client, prompt building, defensive JSON parsing.
+- `internal/tui` — Bubble Tea model and the step-by-step flow.
+- `internal/cmd` — cobra CLI wiring.

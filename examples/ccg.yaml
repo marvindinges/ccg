@@ -1,0 +1,30 @@
+# Example ccg configuration.
+#
+# Place a global version at ~/.config/ccg/config.yaml, and/or a per-project
+# version named .ccg.yaml at your repository root (project overrides global).
+# Environment variables (CCG_BASE_URL, CCG_MODEL, CCG_API_KEY_ENV,
+# CCG_STRICT_SCHEMA) override both.
+#
+# Omit the whole `provider:` block to run ccg in fully manual mode (no AI).
+
+# Include the built-in commit types (feat, fix, docs, ...). Default: true.
+defaults: true
+
+provider:
+  # Any OpenAI-compatible /chat/completions endpoint.
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  # NAME of the environment variable holding your API key (never the key itself).
+  # Leave unset for local servers that don't require a key.
+  api_key_env: OPENAI_API_KEY
+  # Opt into strict json_schema mode for providers that honor it. Default: false
+  # (plain JSON mode + defensive parsing, which works across more providers).
+  strict_schema: false
+
+commit:
+  # Recommended header length limit (warning, not enforced). Default: 72.
+  max_header_len: 72
+  # Custom commit types, merged with the defaults (or used alone if defaults: false).
+  types:
+    - name: infra
+      description: Infrastructure / Terraform changes
