@@ -61,9 +61,11 @@ Requires Go 1.21+ (the toolchain auto-fetches the version pinned in `go.mod`) an
 
 ```sh
 git clone https://github.com/marvindinges/ccg.git && cd ccg
-go build -o ccg .
+CGO_ENABLED=0 go build -o ccg .
 # move ./ccg onto your PATH, e.g. into ~/.local/bin
 ```
+
+(ccg is pure Go; `CGO_ENABLED=0` avoids needing a C compiler.)
 
 ## Usage
 

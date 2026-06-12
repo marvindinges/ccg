@@ -48,12 +48,14 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Upgrading ccg (current: %s)…\n", Version)
 
 	// Re-run the installer non-interactively: rebuild only, leave PATH/config alone.
+	// Force CGO off so the build never needs a C compiler (ccg is pure Go).
 	env := append(os.Environ(),
 		"CCG_ASSUME_YES=1",
 		"CCG_SKIP_PATH=1",
 		"CCG_SKIP_CONFIG=1",
 		"CCG_INSTALL_DIR="+installDir,
 		"CCG_SRC_DIR="+srcDir,
+		"CGO_ENABLED=0",
 	)
 	if len(args) == 1 && args[0] != "" {
 		env = append(env, "CCG_REF="+args[0])

@@ -259,8 +259,11 @@ install_ccg() {
 
 	# Build to a temp file in the install dir (same filesystem → atomic rename,
 	# and safe to replace the currently-running binary during `ccg upgrade`).
+	# CGO is disabled: ccg is pure Go, and with cgo on, `-trimpath` rebuilds the
+	# standard library through a C compiler — which fails on machines without a
+	# working gcc/clang ("gcc: fatal error: no input files").
 	tmpbin=$(mktemp "$INSTALL_DIR/.ccg.XXXXXX") || die "cannot write to $INSTALL_DIR"
-	if ! (cd "$src" && go build -trimpath \
+	if ! (cd "$src" && CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-X ${MODULE}/internal/cmd.Version=${ver}" -o "$tmpbin" .); then
 		rm -f "$tmpbin"
 		die "build failed in $src"
