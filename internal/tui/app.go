@@ -47,6 +47,7 @@ const (
 	stepSummary // review hub: shows the draft + keybindings to edit/commit
 	stepPush
 	stepBusy
+	stepModal // dismissable overlay (e.g. AI-failure message), then continue
 	stepDone
 	stepError
 )
@@ -81,8 +82,9 @@ type Model struct {
 	frame     int    // animation tick counter for the loading view
 	editField string // which segment a single-field edit is editing
 
-	busyText string
-	notice   string // transient banner above a form (e.g. validation errors)
+	busyText  string
+	notice    string // transient banner above a form (e.g. validation errors)
+	modalText string // body of the dismissable overlay (stepModal)
 
 	// outcome
 	committed       bool
@@ -163,6 +165,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.step == stepSummary {
 			return m.handleSummaryKey(msg.String())
 		}
+		// Any key dismisses the overlay and continues to manual editing.
+		if m.step == stepModal {
+			m.modalText = ""
+			return m.enterReview()
+		}
 
 	case statusMsg:
 		return m.onStatus(msg)
@@ -176,8 +183,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.enterSummary()
 
 	case aiErrMsg:
-		m.notice = fmt.Sprintf("AI generation failed (%v) — edit manually.", msg.err)
-		return m.enterReview()
+		// Show the (often long) failure in a dismissable overlay; on any key we
+		// fall through to manual editing.
+		m.modalText = msg.err.Error()
+		m.step = stepModal
+		m.form = nil
+		return m, nil
 
 	case committedMsg:
 		return m.onCommitted()
@@ -466,6 +477,14 @@ func (m Model) completeEdit() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	// The overlay takes over the whole screen until dismissed.
+	if m.step == stepModal {
+		body := m.styles.modalTitle.Render("⚠  AI generation failed") + "\n\n" +
+			m.modalText + "\n\n" +
+			m.styles.subtle.Render("Press any key to write the message manually.")
+		return tea.NewView(m.styles.modal(m.width, m.height, body))
+	}
+
 	var b strings.Builder
 	b.WriteString(m.styles.header(stepLabel(m.step)))
 	b.WriteString("\n\n")
@@ -475,7 +494,8 @@ func (m Model) View() tea.View {
 		if strings.HasPrefix(m.notice, "Fix the following") {
 			style = m.styles.errBox
 		}
-		b.WriteString(style.Render(m.notice))
+		// Constrain to the content width so long notices wrap instead of clipping.
+		b.WriteString(style.Width(formWidth(m.width)).Render(m.notice))
 		b.WriteString("\n\n")
 	}
 
@@ -537,7 +557,7 @@ func (m Model) summaryLegend() string {
 		hints = append(hints, m.styles.key("r", "regenerate"))
 	}
 	hints = append(hints, m.styles.key("e", "edit all"), m.styles.key("q", "cancel"))
-	return strings.Join(hints, m.styles.subtle.Render("  "))
+	return m.styles.footerBar(hints)
 }
 
 func stepLabel(s step) string {

@@ -243,13 +243,22 @@ func TestSummaryRegenerateNeedsAI(t *testing.T) {
 	}
 }
 
-func TestAIErrorFallsBackToReview(t *testing.T) {
+func TestAIErrorShowsOverlayThenReview(t *testing.T) {
 	g := &fakeGit{}
 	m := baseModel(g, fakeAI{})
-	out, _ := m.Update(aiErrMsg{err: errors.New("down")})
+	// The failure first lands on a dismissable overlay carrying the message.
+	out, _ := m.Update(aiErrMsg{err: errors.New("provider returned 400: very long message")})
 	got := out.(Model)
-	if got.step != stepReview || got.notice == "" {
-		t.Errorf("AI error should fall back to review with notice, got step=%v notice=%q", got.step, got.notice)
+	if got.step != stepModal || got.modalText == "" {
+		t.Fatalf("AI error should show overlay, got step=%v modalText=%q", got.step, got.modalText)
+	}
+	if !strings.Contains(got.View().Content, "very long message") {
+		t.Error("overlay should render the error text")
+	}
+	// Any key dismisses the overlay and continues to manual editing.
+	out2, _ := got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if out2.(Model).step != stepReview {
+		t.Errorf("dismissing overlay should go to review, got %v", out2.(Model).step)
 	}
 }
 
