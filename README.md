@@ -43,9 +43,6 @@ build), `CCG_SRC_DIR`, `CCG_REPO_URL`, `CCG_GO_DIR`, `CCG_SKIP_PATH=1`,
 `CCG_SKIP_CONFIG=1`, and `CCG_PROVIDER_BASE_URL` / `CCG_PROVIDER_MODEL` /
 `CCG_PROVIDER_API_KEY_ENV` to pre-fill the config.
 
-> The `curl | sh` URL only resolves once the repo is public. Until then (or to
-> install offline), clone it and build from the checkout:
-> `git clone … && cd ccg && CCG_SOURCE_DIR=$PWD sh install.sh`
 
 ### Upgrade
 
