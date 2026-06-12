@@ -158,6 +158,22 @@ commit:
       description: Infrastructure / Terraform changes
 ```
 
+### Colors
+
+The TUI's two accent colors are configurable. By default they use **terminal
+palette colors** (`bright-blue` / `bright-magenta`), so ccg matches your terminal
+theme. Set them in the global config:
+
+```yaml
+colors:
+  primary: bright-blue       # badges, borders, spinner tail
+  secondary: bright-magenta  # keybinding keys, selectors, spinner head
+```
+
+Each value is a terminal color name (`black`, `red`, `green`, `yellow`, `blue`,
+`magenta`, `cyan`, `white`, and the `bright-*` variants), an ANSI 256 index
+(e.g. `141`), or a hex value (e.g. `#a06bff`). The installer can set these for you.
+
 ### Environment overrides
 
 `CCG_BASE_URL`, `CCG_MODEL`, `CCG_API_KEY_ENV`, `CCG_STRICT_SCHEMA` override the

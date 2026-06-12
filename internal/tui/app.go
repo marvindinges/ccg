@@ -94,13 +94,25 @@ type Model struct {
 
 // New builds the initial model.
 func New(opts Options) Model {
+	primary := parseColor(opts.Cfg.PrimaryColor())
+	secondary := parseColor(opts.Cfg.SecondaryColor())
 	return Model{
 		opts:     opts,
-		styles:   newStyles(),
+		styles:   newStyles(primary, secondary),
 		hint:     opts.Hint,
 		step:     stepBusy,
 		busyText: "Loading changes…",
 	}
+}
+
+// styleForm applies the shared theme, width and (disabled) help to a form. huh's
+// built-in help is off; we render our own hint line (styles.hints) so it matches
+// the review hub's "[KEY] text" format on every stage.
+func (m Model) styleForm(f *huh.Form) *huh.Form {
+	return f.
+		WithTheme(m.styles.huhTheme()).
+		WithWidth(formWidth(m.width)).
+		WithShowHelp(false)
 }
 
 // Run starts the program and returns the final model for summary printing.
@@ -214,7 +226,7 @@ func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
 		m.step = stepError
 		return m, tea.Quit
 	}
-	m.form = styleForm(newStageForm(m.files, m.opts.SelectAll), m.width)
+	m.form = m.styleForm(newStageForm(m.files, m.opts.SelectAll))
 	m.step = stepStage
 	return m, m.form.Init()
 }
@@ -236,7 +248,7 @@ func (m Model) onStaged(msg stagedMsg) (tea.Model, tea.Cmd) {
 		// Hint preset via flag: skip the hint step.
 		return m.enterGenerate()
 	}
-	m.form = styleForm(newHintForm(m.hint), m.width)
+	m.form = m.styleForm(newHintForm(m.hint))
 	m.step = stepHint
 	return m, m.form.Init()
 }
@@ -253,7 +265,7 @@ func (m Model) enterGenerate() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) enterReview() (tea.Model, tea.Cmd) {
-	m.form = styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()), m.width)
+	m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
 	m.step = stepReview
 	return m, m.form.Init()
 }
@@ -282,7 +294,7 @@ func (m Model) handleSummaryKey(key string) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.commitFromSummary()
 	case "e": // edit everything via the full form
-		m.form = styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()), m.width)
+		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
 		m.step = stepReview
 		return m, m.form.Init()
 	case "!": // toggle breaking change in place
@@ -299,7 +311,7 @@ func (m Model) handleSummaryKey(key string) (tea.Model, tea.Cmd) {
 	}
 	if field, ok := summaryKeys[key]; ok {
 		m.editField = field
-		m.form = newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes(), m.width)
+		m.form = m.styleForm(newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes()))
 		m.step = stepEdit
 		return m, m.form.Init()
 	}
@@ -336,7 +348,7 @@ func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 	}
 	branch, _ := m.opts.Git.CurrentBranch()
-	m.form = styleForm(newPushForm(branch), m.width)
+	m.form = m.styleForm(newPushForm(branch))
 	m.step = stepPush
 	return m, m.form.Init()
 }
@@ -400,7 +412,7 @@ func (m Model) completeStage() (tea.Model, tea.Cmd) {
 
 	if len(selected) == 0 && len(toUnstage) == 0 {
 		m.notice = "Select at least one file."
-		m.form = styleForm(newStageForm(m.files, m.opts.SelectAll), m.width)
+		m.form = m.styleForm(newStageForm(m.files, m.opts.SelectAll))
 		return m, m.form.Init()
 	}
 
@@ -423,7 +435,7 @@ func (m Model) completeReview() (tea.Model, tea.Cmd) {
 	if commit.HasFatal(errs) {
 		m.notice = "Fix the following before committing:\n" + formatErrors(errs)
 		// Re-enter review, preserving the user's edits (seeded from m.draft).
-		m.form = styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()), m.width)
+		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
 		m.step = stepReview
 		return m, m.form.Init()
 	}

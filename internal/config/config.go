@@ -16,6 +16,13 @@ import (
 // ProjectFileName is the per-project config file, looked up at the repo root.
 const ProjectFileName = ".ccg.yaml"
 
+// Default accent colors. These are terminal-palette colors (ANSI names) so the
+// TUI matches the user's terminal theme out of the box.
+const (
+	DefaultPrimaryColor   = "bright-blue"
+	DefaultSecondaryColor = "bright-magenta"
+)
+
 // ProviderConfig describes an OpenAI-compatible chat-completions endpoint.
 // A single generic client covers OpenAI, OpenRouter, Groq, LM Studio,
 // llama.cpp and any compatible server — only these fields differ.
@@ -28,6 +35,14 @@ type ProviderConfig struct {
 	// StrictSchema opts into json_schema strict mode for providers that honor
 	// it; otherwise plain JSON mode + defensive parsing is used.
 	StrictSchema bool `yaml:"strict_schema"`
+}
+
+// ColorConfig holds the TUI accent colors. Each value is a color spec: a
+// terminal color name ("bright-blue", "magenta", …), an ANSI 256 index ("141"),
+// or a hex value ("#a06bff"). Empty values fall back to the defaults.
+type ColorConfig struct {
+	Primary   string `yaml:"primary"`
+	Secondary string `yaml:"secondary"`
 }
 
 // CommitConfig holds commit-related settings.
@@ -43,6 +58,7 @@ type CommitConfig struct {
 type Config struct {
 	Provider ProviderConfig `yaml:"provider"`
 	Commit   CommitConfig   `yaml:"commit"`
+	Colors   ColorConfig    `yaml:"colors"`
 	// UseDefaults includes the built-in commit types (git-cm `defaults = true`).
 	// Defaults to true when unset in YAML (see Load).
 	UseDefaults *bool `yaml:"defaults"`
@@ -64,6 +80,22 @@ func (c Config) APIKey() string {
 // are required; the API key may be empty for local servers that ignore it.
 func (c Config) HasProvider() bool {
 	return c.Provider.BaseURL != "" && c.Provider.Model != ""
+}
+
+// PrimaryColor returns the configured primary accent color spec, or the default.
+func (c Config) PrimaryColor() string {
+	if c.Colors.Primary != "" {
+		return c.Colors.Primary
+	}
+	return DefaultPrimaryColor
+}
+
+// SecondaryColor returns the configured secondary accent color spec, or default.
+func (c Config) SecondaryColor() string {
+	if c.Colors.Secondary != "" {
+		return c.Colors.Secondary
+	}
+	return DefaultSecondaryColor
 }
 
 // MaxHeaderLen returns the effective header length limit.

@@ -25,6 +25,8 @@
 #   CCG_PROVIDER_BASE_URL    pre-fill provider base_url for config setup
 #   CCG_PROVIDER_MODEL       pre-fill provider model
 #   CCG_PROVIDER_API_KEY_ENV pre-fill the name of the API-key env var
+#   CCG_PRIMARY_COLOR        pre-fill the primary accent color (default bright-blue)
+#   CCG_SECONDARY_COLOR      pre-fill the secondary accent color (default bright-magenta)
 
 set -eu
 
@@ -360,30 +362,34 @@ setup_config() {
 	info "Configure an AI provider (any OpenAI-compatible endpoint). Leave the base"
 	info "URL blank to skip AI and use ccg in manual mode."
 	base_url=$(prompt_value "Provider base URL (e.g. https://api.openai.com/v1)" "${CCG_PROVIDER_BASE_URL:-}")
-
-	mkdir -p "$CONFIG_DIR"
-	if [ -z "$base_url" ]; then
-		{
-			echo "defaults: true"
-			echo "commit:"
-			echo "  max_header_len: 72"
-		} >"$CONFIG_FILE"
-		info "Wrote $CONFIG_FILE (manual mode — no provider)."
-		return 0
+	model=""
+	key_env=""
+	if [ -n "$base_url" ]; then
+		model=$(prompt_value "Model (e.g. gpt-4o-mini)" "${CCG_PROVIDER_MODEL:-}")
+		key_env=$(prompt_value "Name of the env var holding the API key (blank for local servers)" "${CCG_PROVIDER_API_KEY_ENV:-}")
 	fi
 
-	model=$(prompt_value "Model (e.g. gpt-4o-mini)" "${CCG_PROVIDER_MODEL:-}")
-	key_env=$(prompt_value "Name of the env var holding the API key (blank for local servers)" "${CCG_PROVIDER_API_KEY_ENV:-}")
+	info ""
+	info "Accent colors. Use a terminal color name (e.g. bright-blue, cyan, magenta)"
+	info "to match your terminal theme, an ANSI 256 index (e.g. 141), or a #hex value."
+	primary=$(prompt_value "Primary color" "${CCG_PRIMARY_COLOR:-bright-blue}")
+	secondary=$(prompt_value "Secondary color" "${CCG_SECONDARY_COLOR:-bright-magenta}")
 
+	mkdir -p "$CONFIG_DIR"
 	{
 		echo "defaults: true"
-		echo "provider:"
-		echo "  base_url: $base_url"
-		echo "  model: $model"
-		if [ -n "$key_env" ]; then
-			echo "  api_key_env: $key_env"
+		if [ -n "$base_url" ]; then
+			echo "provider:"
+			echo "  base_url: $base_url"
+			echo "  model: $model"
+			if [ -n "$key_env" ]; then
+				echo "  api_key_env: $key_env"
+			fi
+			echo "  strict_schema: false"
 		fi
-		echo "  strict_schema: false"
+		echo "colors:"
+		echo "  primary: $primary"
+		echo "  secondary: $secondary"
 		echo "commit:"
 		echo "  max_header_len: 72"
 	} >"$CONFIG_FILE"

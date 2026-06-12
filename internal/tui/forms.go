@@ -21,16 +21,6 @@ func formWidth(termWidth int) int {
 	return w
 }
 
-// styleForm applies the shared theme, width and help styling to a form.
-func styleForm(f *huh.Form, termWidth int) *huh.Form {
-	// huh's built-in help is disabled; we render our own hint line (styles.hints)
-	// so it matches the review hub's "[KEY] text" format on every stage.
-	return f.
-		WithTheme(huh.ThemeFunc(ccgTheme)).
-		WithWidth(formWidth(termWidth)).
-		WithShowHelp(false)
-}
-
 // Form field keys.
 const (
 	keyFiles    = "files"
@@ -159,7 +149,7 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 // newFieldForm builds a single-field form for editing one segment of the commit
 // from the summary screen, pre-filled from draft. The returned form's value is
 // read back via the matching key on completion.
-func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType, termWidth int) *huh.Form {
+func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 	var group *huh.Group
 	switch field {
 	case keyType:
@@ -203,7 +193,7 @@ func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType
 	default:
 		group = huh.NewGroup(huh.NewNote().Title("Nothing to edit"))
 	}
-	return styleForm(huh.NewForm(group), termWidth)
+	return huh.NewForm(group)
 }
 
 // newPushForm asks whether to push now.

@@ -10,6 +10,10 @@ import (
 )
 
 type styles struct {
+	primary   color.Color   // configurable accent (badges, borders, spinner tail)
+	secondary color.Color   // configurable accent (keys, selectors, spinner head)
+	shimmer   []color.Color // loading-sweep colors, derived from the accents
+
 	logo     lipgloss.Style // "ccg" badge
 	stage    lipgloss.Style // current-step badge
 	subtle   lipgloss.Style
@@ -21,28 +25,49 @@ type styles struct {
 	previewT lipgloss.Style
 }
 
-// Palette (ANSI 256 — works on the typical WSL/Windows terminal).
+// Fixed semantic colors (not user-configurable). White is the terminal's bright
+// white so badge text stays readable on any accent background.
 var (
-	colMauve = lipgloss.Color("141") // soft purple
-	colPink  = lipgloss.Color("212")
+	colWhite = lipgloss.Color("15")
 	colGreen = lipgloss.Color("42")
 	colRed   = lipgloss.Color("203")
 	colYell  = lipgloss.Color("221")
 	colDim   = lipgloss.Color("240")
 )
 
-func newStyles() styles {
+// ansiNames maps terminal color names to ANSI palette indices, so a config of
+// "bright-blue" follows the user's terminal theme.
+var ansiNames = map[string]string{
+	"black": "0", "red": "1", "green": "2", "yellow": "3",
+	"blue": "4", "magenta": "5", "purple": "5", "cyan": "6", "white": "7",
+	"gray": "8", "grey": "8", "bright-black": "8",
+	"bright-red": "9", "bright-green": "10", "bright-yellow": "11",
+	"bright-blue": "12", "bright-magenta": "13", "bright-purple": "13",
+	"bright-cyan": "14", "bright-white": "15",
+}
+
+// parseColor turns a config color spec into a color: a terminal color name
+// ("bright-blue"), an ANSI 256 index ("141"), or a hex value ("#a06bff").
+func parseColor(spec string) color.Color {
+	s := strings.ToLower(strings.TrimSpace(spec))
+	if idx, ok := ansiNames[s]; ok {
+		return lipgloss.Color(idx)
+	}
+	return lipgloss.Color(spec)
+}
+
+func newStyles(primary, secondary color.Color) styles {
+	badge := func(bg color.Color) lipgloss.Style {
+		return lipgloss.NewStyle().Bold(true).Foreground(colWhite).Background(bg).Padding(0, 1)
+	}
 	return styles{
-		logo: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("231")).
-			Background(colMauve).
-			Padding(0, 1),
-		stage: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("231")).
-			Background(colPink).
-			Padding(0, 1),
+		primary:   primary,
+		secondary: secondary,
+		// Sweep: bright head → secondary → primary, then dim tail.
+		shimmer: []color.Color{colWhite, secondary, primary},
+
+		logo:   badge(primary),
+		stage:  badge(secondary),
 		subtle: lipgloss.NewStyle().Foreground(colDim),
 		errBox: lipgloss.NewStyle().
 			Foreground(colRed).Bold(true).
@@ -53,46 +78,36 @@ func newStyles() styles {
 			Border(lipgloss.RoundedBorder(), false, false, false, true).
 			BorderForeground(colYell).PaddingLeft(1),
 		success: lipgloss.NewStyle().Foreground(colGreen).Bold(true),
-		spin:    lipgloss.NewStyle().Foreground(colMauve),
+		spin:    lipgloss.NewStyle().Foreground(secondary),
 		preview: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colMauve).
+			BorderForeground(primary).
 			Padding(0, 1),
-		previewT: lipgloss.NewStyle().Foreground(colMauve).Bold(true),
+		previewT: lipgloss.NewStyle().Foreground(primary).Bold(true),
 	}
 }
 
 // brailleFrames drives the spinner glyph.
 var brailleFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 
-// shimmerColors are the bright-to-trailing colors swept across the label.
-var shimmerColors = []color.Color{
-	lipgloss.Color("231"), // brightest (head)
-	lipgloss.Color("225"),
-	lipgloss.Color("213"),
-	lipgloss.Color("212"),
-	lipgloss.Color("141"),
-	lipgloss.Color("98"),
-}
-
 // loading renders an animated loader: a cycling braille spinner followed by the
 // label with a bright highlight that sweeps across it (a shimmer/wave effect).
 // frame is a monotonically increasing tick counter.
 func (s styles) loading(frame int, label string) string {
-	sp := lipgloss.NewStyle().Foreground(colPink).Bold(true).
+	sp := lipgloss.NewStyle().Foreground(s.secondary).Bold(true).
 		Render(string(brailleFrames[frame%len(brailleFrames)]))
 
 	runes := []rune(label)
 	// The bright head travels across the label and a trailing gap, then loops.
-	span := len(runes) + len(shimmerColors) + 4
+	span := len(runes) + len(s.shimmer) + 4
 	head := frame % span
 
 	dim := lipgloss.NewStyle().Foreground(colDim)
 	var b strings.Builder
 	for i, r := range runes {
 		d := head - i // distance behind the moving head
-		if d >= 0 && d < len(shimmerColors) {
-			st := lipgloss.NewStyle().Foreground(shimmerColors[d])
+		if d >= 0 && d < len(s.shimmer) {
+			st := lipgloss.NewStyle().Foreground(s.shimmer[d])
 			if d == 0 {
 				st = st.Bold(true)
 			}
@@ -101,14 +116,13 @@ func (s styles) loading(frame int, label string) string {
 			b.WriteString(dim.Render(string(r)))
 		}
 	}
-	// Animated trailing dots.
 	dots := strings.Repeat(".", frame%4)
 	return sp + " " + b.String() + dim.Render(dots)
 }
 
 // key renders a keybinding hint like "[t] type" with the key emphasized.
 func (s styles) key(k, label string) string {
-	cap := lipgloss.NewStyle().Foreground(colPink).Bold(true).Render(k)
+	cap := lipgloss.NewStyle().Foreground(s.secondary).Bold(true).Render(k)
 	return s.subtle.Render("[") + cap + s.subtle.Render("] ") + s.subtle.Render(label)
 }
 
@@ -142,18 +156,22 @@ func (s styles) header(stepLabel string) string {
 	return out
 }
 
-// ccgTheme is huh's Charm theme with the form's keybinding help recolored to
-// match the review hub's hints (pink keys, dim labels).
-func ccgTheme(isDark bool) *huh.Styles {
-	s := huh.ThemeCharm(isDark)
-	keyStyle := lipgloss.NewStyle().Foreground(colPink).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colDim)
-	s.Help.ShortKey = s.Help.ShortKey.Foreground(colPink).Bold(true)
-	s.Help.ShortDesc = s.Help.ShortDesc.Foreground(colDim)
-	s.Help.ShortSeparator = s.Help.ShortSeparator.Foreground(colDim)
-	s.Help.FullKey = keyStyle
-	s.Help.FullDesc = descStyle
-	s.Help.FullSeparator = descStyle
-	s.Help.Ellipsis = descStyle
-	return s
+// huhTheme is huh's Charm theme recolored so the focused field's accents use
+// the configured primary/secondary colors, matching the rest of the TUI.
+func (s styles) huhTheme() huh.Theme {
+	return huh.ThemeFunc(func(isDark bool) *huh.Styles {
+		st := huh.ThemeCharm(isDark)
+		f := &st.Focused
+		f.Base = f.Base.BorderForeground(s.primary)
+		f.Title = f.Title.Foreground(s.primary).Bold(true)
+		f.NoteTitle = f.NoteTitle.Foreground(s.primary)
+		f.SelectSelector = f.SelectSelector.Foreground(s.secondary)
+		f.MultiSelectSelector = f.MultiSelectSelector.Foreground(s.secondary)
+		f.SelectedOption = f.SelectedOption.Foreground(s.secondary)
+		f.SelectedPrefix = f.SelectedPrefix.Foreground(s.secondary)
+		f.NextIndicator = f.NextIndicator.Foreground(s.secondary)
+		f.PrevIndicator = f.PrevIndicator.Foreground(s.secondary)
+		f.FocusedButton = f.FocusedButton.Background(s.primary).Foreground(colWhite)
+		return st
+	})
 }

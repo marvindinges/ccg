@@ -198,6 +198,29 @@ func TestGlobalConfigPath(t *testing.T) {
 	}
 }
 
+func TestColorsDefaultsAndOverride(t *testing.T) {
+	// Defaults when unset.
+	def := Config{}
+	if def.PrimaryColor() != DefaultPrimaryColor || def.SecondaryColor() != DefaultSecondaryColor {
+		t.Errorf("defaults = %q/%q, want %q/%q",
+			def.PrimaryColor(), def.SecondaryColor(), DefaultPrimaryColor, DefaultSecondaryColor)
+	}
+	// Loaded from project config.
+	setupGlobal(t, "")
+	root := writeProject(t, `
+colors:
+  primary: cyan
+  secondary: "#ff8800"
+`)
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PrimaryColor() != "cyan" || cfg.SecondaryColor() != "#ff8800" {
+		t.Errorf("got %q/%q", cfg.PrimaryColor(), cfg.SecondaryColor())
+	}
+}
+
 func TestMissingFilesUseDefaults(t *testing.T) {
 	setupGlobal(t, "")
 	cfg, err := Load("")

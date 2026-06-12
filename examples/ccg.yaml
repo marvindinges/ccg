@@ -21,6 +21,13 @@ provider:
   # (plain JSON mode + defensive parsing, which works across more providers).
   strict_schema: false
 
+# TUI accent colors. Each value is a terminal color name (bright-blue, cyan,
+# magenta, …) that follows your terminal theme, an ANSI 256 index (e.g. 141),
+# or a hex value (e.g. #a06bff). Defaults: bright-blue / bright-magenta.
+colors:
+  primary: bright-blue
+  secondary: bright-magenta
+
 commit:
   # Recommended header length limit (warning, not enforced). Default: 72.
   max_header_len: 72

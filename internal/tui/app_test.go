@@ -323,7 +323,7 @@ func TestAnimStopsWhenNotLoading(t *testing.T) {
 }
 
 func TestLoadingViewAnimates(t *testing.T) {
-	s := newStyles()
+	s := newStyles(parseColor("bright-blue"), parseColor("bright-magenta"))
 	a := s.loading(0, "Working")
 	b := s.loading(1, "Working")
 	if a == b {
@@ -338,7 +338,7 @@ func TestViewDoesNotPanicAcrossSteps(t *testing.T) {
 	g := &fakeGit{}
 	m := baseModel(g, fakeAI{})
 	m.draft = commit.Commit{Type: "feat", Scope: "ui", Description: "x"}
-	m.form = styleForm(newReviewForm(m.draft, commit.DefaultTypes()), 80)
+	m.form = m.styleForm(newReviewForm(m.draft, commit.DefaultTypes()))
 	for _, s := range []step{stepStage, stepHint, stepGenerate, stepReview, stepEdit, stepSummary, stepPush, stepBusy, stepDone, stepError} {
 		m.step = s
 		if s == stepError {
