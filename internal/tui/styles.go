@@ -103,6 +103,12 @@ func (s styles) loading(frame int, label string) string {
 	return sp + " " + b.String() + dim.Render(dots)
 }
 
+// key renders a keybinding hint like "[t] type" with the key emphasized.
+func (s styles) key(k, label string) string {
+	cap := lipgloss.NewStyle().Foreground(colPink).Bold(true).Render(k)
+	return s.subtle.Render("[") + cap + s.subtle.Render("] ") + s.subtle.Render(label)
+}
+
 // header renders the branded title line plus a contextual step label.
 func (s styles) header(stepLabel string) string {
 	line := s.logo.Render("ccg") + "  " + s.tagline.Render("conventional commits")

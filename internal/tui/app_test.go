@@ -164,13 +164,82 @@ func TestOnStagedWithAIAndPresetHintSkipsToGenerate(t *testing.T) {
 	}
 }
 
-func TestDraftMsgEntersReview(t *testing.T) {
+func TestDraftMsgEntersSummary(t *testing.T) {
 	g := &fakeGit{}
 	m := baseModel(g, fakeAI{})
 	out, _ := m.Update(draftMsg{commit: commit.Commit{Type: "feat", Description: "x"}})
 	got := out.(Model)
-	if got.step != stepReview || got.draft.Type != "feat" {
-		t.Errorf("draft should enter review, got step=%v draft=%+v", got.step, got.draft)
+	if got.step != stepSummary || got.draft.Type != "feat" {
+		t.Errorf("AI draft should land on summary, got step=%v draft=%+v", got.step, got.draft)
+	}
+	if got.form != nil {
+		t.Error("summary is key-driven; form should be nil")
+	}
+}
+
+func TestSummaryToggleBreaking(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, fakeAI{})
+	m.step = stepSummary
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
+	out, _ := m.Update(tea.KeyPressMsg{Code: '!'})
+	if !out.(Model).draft.Breaking {
+		t.Error("'!' should toggle breaking on")
+	}
+}
+
+func TestSummaryEditKeyOpensFieldForm(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, fakeAI{})
+	m.step = stepSummary
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'd'})
+	got := out.(Model)
+	if got.step != stepEdit || got.editField != keyDesc || got.form == nil {
+		t.Errorf("'d' should open a description edit form, got step=%v field=%q", got.step, got.editField)
+	}
+}
+
+func TestSummaryEnterCommits(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, nil)
+	m.step = stepSummary
+	m.draft = commit.Commit{Type: "feat", Description: "do thing"}
+	out, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got := out.(Model)
+	if got.step != stepBusy || cmd == nil {
+		t.Errorf("enter should start committing, got step=%v", got.step)
+	}
+}
+
+func TestSummaryEnterBlockedWhenInvalid(t *testing.T) {
+	g := &fakeGit{}
+	m := baseModel(g, nil)
+	m.step = stepSummary
+	m.draft = commit.Commit{} // no type/description
+	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got := out.(Model)
+	if got.step != stepSummary || got.notice == "" {
+		t.Errorf("invalid draft should stay on summary with a notice, got step=%v", got.step)
+	}
+}
+
+func TestSummaryRegenerateNeedsAI(t *testing.T) {
+	// With AI + a diff, 'r' regenerates.
+	g := &fakeGit{}
+	m := baseModel(g, fakeAI{})
+	m.step = stepSummary
+	m.diff = "some diff"
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'r'})
+	if out.(Model).step != stepGenerate {
+		t.Errorf("'r' with AI should regenerate, got %v", out.(Model).step)
+	}
+	// Without AI, 'r' is a no-op.
+	m2 := baseModel(g, nil)
+	m2.step = stepSummary
+	out2, _ := m2.Update(tea.KeyPressMsg{Code: 'r'})
+	if out2.(Model).step != stepSummary {
+		t.Errorf("'r' without AI should do nothing, got %v", out2.(Model).step)
 	}
 }
 
@@ -267,10 +336,10 @@ func TestLoadingViewAnimates(t *testing.T) {
 
 func TestViewDoesNotPanicAcrossSteps(t *testing.T) {
 	g := &fakeGit{}
-	m := baseModel(g, nil)
+	m := baseModel(g, fakeAI{})
 	m.draft = commit.Commit{Type: "feat", Scope: "ui", Description: "x"}
-	m.form = styleForm(newConfirmForm(false), 80)
-	for _, s := range []step{stepStage, stepHint, stepGenerate, stepReview, stepConfirm, stepPush, stepBusy, stepDone, stepError} {
+	m.form = styleForm(newReviewForm(m.draft, commit.DefaultTypes()), 80)
+	for _, s := range []step{stepStage, stepHint, stepGenerate, stepReview, stepEdit, stepSummary, stepPush, stepBusy, stepDone, stepError} {
 		m.step = s
 		if s == stepError {
 			m.err = errTest
@@ -279,6 +348,18 @@ func TestViewDoesNotPanicAcrossSteps(t *testing.T) {
 		if v.Content == "" && s != stepError {
 			t.Errorf("step %v produced empty view", s)
 		}
+	}
+}
+
+func TestSummaryLegendVaries(t *testing.T) {
+	// With AI, the legend offers regenerate; without, it doesn't.
+	withAI := baseModel(&fakeGit{}, fakeAI{})
+	if !strings.Contains(stripANSI(withAI.summaryLegend()), "regenerate") {
+		t.Error("AI summary legend should offer regenerate")
+	}
+	noAI := baseModel(&fakeGit{}, nil)
+	if strings.Contains(stripANSI(noAI.summaryLegend()), "regenerate") {
+		t.Error("non-AI summary legend should not offer regenerate")
 	}
 }
 
@@ -293,8 +374,8 @@ func TestPreviewBoxShowsHeader(t *testing.T) {
 }
 
 func TestStepLabels(t *testing.T) {
-	if stepLabel(stepReview) != "review & edit" {
-		t.Errorf("unexpected label: %q", stepLabel(stepReview))
+	if stepLabel(stepSummary) != "review" {
+		t.Errorf("unexpected label: %q", stepLabel(stepSummary))
 	}
 	if stepLabel(step(999)) != "" {
 		t.Errorf("unknown step should be empty label")

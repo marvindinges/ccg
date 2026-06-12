@@ -154,16 +154,54 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 	)
 }
 
-// newConfirmForm asks the user to confirm creating the commit. dryRun changes
-// the wording (no commit is created).
-func newConfirmForm(dryRun bool) *huh.Form {
-	v := true
-	title := "Create this commit?"
-	if dryRun {
-		title = "Dry run — print this message and exit?"
+// newFieldForm builds a single-field form for editing one segment of the commit
+// from the summary screen, pre-filled from draft. The returned form's value is
+// read back via the matching key on completion.
+func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType, termWidth int) *huh.Form {
+	var group *huh.Group
+	switch field {
+	case keyType:
+		opts := make([]huh.Option[string], 0, len(allowed))
+		for _, t := range allowed {
+			opts = append(opts, huh.NewOption(fmt.Sprintf("%s — %s", t.Name, t.Description), t.Name))
+		}
+		v := draft.Type
+		if v == "" && len(allowed) > 0 {
+			v = allowed[0].Name
+		}
+		group = huh.NewGroup(huh.NewSelect[string]().Key(keyType).Title("Type").Options(opts...).Height(8).Value(&v))
+	case keyScope:
+		v := draft.Scope
+		group = huh.NewGroup(huh.NewInput().Key(keyScope).Title("Scope (optional)").
+			Placeholder("component or area").Value(&v).
+			Validate(func(s string) error {
+				if strings.ContainsAny(s, " \t)") {
+					return fmt.Errorf("scope must not contain spaces or ')'")
+				}
+				return nil
+			}))
+	case keyDesc:
+		v := draft.Description
+		group = huh.NewGroup(huh.NewInput().Key(keyDesc).Title("Short description").
+			Placeholder("imperative summary, no trailing period").Value(&v).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return fmt.Errorf("description is required")
+				}
+				return nil
+			}))
+	case keyBody:
+		v := draft.Body
+		group = huh.NewGroup(huh.NewText().Key(keyBody).Title("Body (alt+enter for newline)").
+			Placeholder("Explain what and why, not how.").Lines(5).Value(&v))
+	case keyFooters:
+		v := footersToText(draft.Footers)
+		group = huh.NewGroup(huh.NewText().Key(keyFooters).Title("Footers (one per line)").
+			Placeholder("Refs: #123").Lines(4).Value(&v))
+	default:
+		group = huh.NewGroup(huh.NewNote().Title("Nothing to edit"))
 	}
-	c := huh.NewConfirm().Key(keyConfirm).Title(title).Value(&v)
-	return huh.NewForm(huh.NewGroup(c))
+	return styleForm(huh.NewForm(group), termWidth)
 }
 
 // newPushForm asks whether to push now.

@@ -42,8 +42,9 @@ const (
 	stepStage step = iota
 	stepHint
 	stepGenerate
-	stepReview
-	stepConfirm
+	stepReview  // full multi-field form (manual entry / "edit all")
+	stepEdit    // single-field edit launched from the summary
+	stepSummary // review hub: shows the draft + keybindings to edit/commit
 	stepPush
 	stepBusy
 	stepDone
@@ -75,9 +76,10 @@ type Model struct {
 	diff     string
 	draft    commit.Commit
 
-	width  int
-	height int
-	frame  int // animation tick counter for the loading view
+	width     int
+	height    int
+	frame     int    // animation tick counter for the loading view
+	editField string // which segment a single-field edit is editing
 
 	busyText string
 	notice   string // transient banner above a form (e.g. validation errors)
@@ -145,6 +147,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.aborted = true
 			return m, tea.Quit
 		}
+		// The summary screen is key-driven (not a form).
+		if m.step == stepSummary {
+			return m.handleSummaryKey(msg.String())
+		}
 
 	case statusMsg:
 		return m.onStatus(msg)
@@ -153,8 +159,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onStaged(msg)
 
 	case draftMsg:
+		// After a successful AI draft, land on the summary hub (not the full form).
 		m.draft = msg.commit
-		return m.enterReview()
+		return m.enterSummary()
 
 	case aiErrMsg:
 		m.notice = fmt.Sprintf("AI generation failed (%v) — edit manually.", msg.err)
@@ -193,7 +200,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func hasForm(s step) bool {
 	switch s {
-	case stepStage, stepHint, stepReview, stepConfirm, stepPush:
+	case stepStage, stepHint, stepReview, stepEdit, stepPush:
 		return true
 	}
 	return false
@@ -251,6 +258,71 @@ func (m Model) enterReview() (tea.Model, tea.Cmd) {
 	return m, m.form.Init()
 }
 
+// enterSummary shows the review hub: the rendered draft plus keybindings to
+// edit individual segments, toggle breaking, regenerate, or commit.
+func (m Model) enterSummary() (tea.Model, tea.Cmd) {
+	m.form = nil
+	m.step = stepSummary
+	return m, nil
+}
+
+// summaryKeys maps a pressed key to the segment field it edits.
+var summaryKeys = map[string]string{
+	"t": keyType,
+	"s": keyScope,
+	"d": keyDesc,
+	"b": keyBody,
+	"f": keyFooters,
+}
+
+// handleSummaryKey dispatches a keypress on the summary hub.
+func (m Model) handleSummaryKey(key string) (tea.Model, tea.Cmd) {
+	m.notice = ""
+	switch key {
+	case "enter":
+		return m.commitFromSummary()
+	case "e": // edit everything via the full form
+		m.form = styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()), m.width)
+		m.step = stepReview
+		return m, m.form.Init()
+	case "!": // toggle breaking change in place
+		m.draft.Breaking = !m.draft.Breaking
+		return m, nil
+	case "r": // regenerate from the diff (only when AI is configured)
+		if m.opts.AI != nil && strings.TrimSpace(m.diff) != "" {
+			return m.enterGenerate()
+		}
+		return m, nil
+	case "q", "esc":
+		m.aborted = true
+		return m, tea.Quit
+	}
+	if field, ok := summaryKeys[key]; ok {
+		m.editField = field
+		m.form = newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes(), m.width)
+		m.step = stepEdit
+		return m, m.form.Init()
+	}
+	return m, nil
+}
+
+// commitFromSummary validates the draft and creates the commit (or prints it on
+// a dry run). Fatal validation errors keep the user on the summary.
+func (m Model) commitFromSummary() (tea.Model, tea.Cmd) {
+	errs := m.draft.Validate(m.opts.Cfg.AllowedTypes(), m.opts.Cfg.MaxHeaderLen())
+	if commit.HasFatal(errs) {
+		m.notice = "Fix the following before committing:\n" + formatErrors(errs)
+		return m, nil
+	}
+	if m.opts.DryRun {
+		m.step = stepDone
+		return m, tea.Quit
+	}
+	m.busyText = "Creating commit…"
+	m.step = stepBusy
+	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
+}
+
 // onCommitted decides whether to push after a successful commit.
 func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 	m.committed = true
@@ -296,8 +368,8 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		return m.enterGenerate()
 	case stepReview:
 		return m.completeReview()
-	case stepConfirm:
-		return m.completeConfirm()
+	case stepEdit:
+		return m.completeEdit()
 	case stepPush:
 		if m.form.GetBool(keyConfirm) {
 			m.busyText = "Pushing…"
@@ -359,23 +431,26 @@ func (m Model) completeReview() (tea.Model, tea.Cmd) {
 		m.notice = "Warnings:\n" + formatErrors(errs)
 	}
 
-	m.form = styleForm(newConfirmForm(m.opts.DryRun), m.width)
-	m.step = stepConfirm
-	return m, m.form.Init()
+	return m.enterSummary()
 }
 
-func (m Model) completeConfirm() (tea.Model, tea.Cmd) {
-	if !m.form.GetBool(keyConfirm) {
-		// User declined; go back to editing.
-		return m.enterReview()
+// completeEdit reads back the single segment edited from the summary and
+// returns to the summary hub.
+func (m Model) completeEdit() (tea.Model, tea.Cmd) {
+	switch m.editField {
+	case keyType:
+		m.draft.Type = m.form.GetString(keyType)
+	case keyScope:
+		m.draft.Scope = strings.TrimSpace(m.form.GetString(keyScope))
+	case keyDesc:
+		m.draft.Description = strings.TrimSpace(m.form.GetString(keyDesc))
+	case keyBody:
+		m.draft.Body = strings.TrimRight(m.form.GetString(keyBody), "\n")
+	case keyFooters:
+		m.draft.Footers = parseFooters(m.form.GetString(keyFooters))
 	}
-	if m.opts.DryRun {
-		m.step = stepDone
-		return m, tea.Quit
-	}
-	m.busyText = "Creating commit…"
-	m.step = stepBusy
-	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
+	m.editField = ""
+	return m.enterSummary()
 }
 
 func (m Model) View() tea.View {
@@ -403,12 +478,10 @@ func (m Model) View() tea.View {
 		}
 	case stepDone:
 		b.WriteString(m.styles.success.Render("✓ Done."))
-	case stepConfirm:
+	case stepSummary:
 		b.WriteString(m.previewBox())
 		b.WriteString("\n\n")
-		if m.form != nil {
-			b.WriteString(m.form.View())
-		}
+		b.WriteString(m.summaryLegend())
 	default:
 		if m.form != nil {
 			b.WriteString(m.form.View())
@@ -426,6 +499,32 @@ func (m Model) previewBox() string {
 	return title + "\n" + m.styles.preview.Render(msg)
 }
 
+// summaryLegend renders the keybinding hints shown on the summary hub.
+func (m Model) summaryLegend() string {
+	commitLabel := "commit"
+	if m.opts.DryRun {
+		commitLabel = "print & exit"
+	}
+	breaking := "mark breaking"
+	if m.draft.Breaking {
+		breaking = "unmark breaking"
+	}
+	hints := []string{
+		m.styles.key("↵", commitLabel),
+		m.styles.key("t", "type"),
+		m.styles.key("s", "scope"),
+		m.styles.key("d", "description"),
+		m.styles.key("b", "body"),
+		m.styles.key("f", "footers"),
+		m.styles.key("!", breaking),
+	}
+	if m.opts.AI != nil {
+		hints = append(hints, m.styles.key("r", "regenerate"))
+	}
+	hints = append(hints, m.styles.key("e", "edit all"), m.styles.key("q", "cancel"))
+	return strings.Join(hints, m.styles.subtle.Render("  "))
+}
+
 func stepLabel(s step) string {
 	switch s {
 	case stepStage:
@@ -435,9 +534,11 @@ func stepLabel(s step) string {
 	case stepGenerate:
 		return "generating"
 	case stepReview:
-		return "review & edit"
-	case stepConfirm:
-		return "confirm"
+		return "edit all"
+	case stepEdit:
+		return "edit"
+	case stepSummary:
+		return "review"
 	case stepPush:
 		return "push"
 	case stepBusy:

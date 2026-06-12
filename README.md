@@ -6,7 +6,7 @@ written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 a
 [huh](https://github.com/charmbracelet/huh).
 
 - **Guided commit flow:** select files → (optional) hint → (optional) AI draft →
-  review & edit every segment → confirm → (optional) push.
+  review hub (edit any part with a keypress, or commit) → (optional) push.
 - **You always verify.** AI output is never committed without you reviewing and
   editing it in the form first.
 - **Works with no AI at all (manual).** With no provider configured, ccg is a fully manual
@@ -51,10 +51,26 @@ ccg config path   # print the global and project config file paths
 ccg version
 ```
 
+### The review hub
+
+After a commit is drafted (by AI, or after you fill the manual form), ccg shows a
+**review hub**: the rendered commit message plus keybindings to jump straight to
+any part — no need to walk through every field. From the hub:
+
+| Key | Action |
+|-----|--------|
+| `enter` | Create the commit |
+| `t` / `s` / `d` / `b` / `f` | Edit type / scope / description / body / footers |
+| `!` | Toggle breaking change |
+| `r` | Regenerate from the diff (only when AI is configured) |
+| `e` | Edit everything (the full step-by-step form) |
+| `q` / `esc` | Cancel |
+
 ### Keybindings (in the forms)
 
 - **Select files:** `space` (or `x`) to toggle, `enter` to confirm.
-- **Move between fields:** `enter` or `tab` (and `shift+tab` to go back).
+- **Move between fields:** `enter` or `tab` (and `shift+tab` to go back). The form
+  is paginated, so you see one short page at a time.
 - **Multi-line body/footers:** `enter` advances to the next field; use
   `alt+enter` (or `ctrl+j`) to insert a newline within the body.
 - **Cancel anytime:** `ctrl+c` (nothing is committed).
