@@ -41,8 +41,10 @@ curl -fsSL https://raw.githubusercontent.com/marvindinges/ccg/main/install.sh | 
 
 Useful environment knobs: `CCG_INSTALL_DIR`, `CCG_REF` (branch/tag/commit to
 build), `CCG_SRC_DIR`, `CCG_REPO_URL`, `CCG_GO_DIR`, `CCG_SKIP_PATH=1`,
-`CCG_SKIP_CONFIG=1`, and `CCG_PROVIDER_BASE_URL` / `CCG_PROVIDER_MODEL` /
-`CCG_PROVIDER_API_KEY_ENV` to pre-fill the config.
+`CCG_SKIP_CONFIG=1`. The installer can pre-fill **every** config value, too:
+`CCG_PROVIDER_BASE_URL`, `CCG_PROVIDER_MODEL`, `CCG_PROVIDER_API_KEY_ENV`,
+`CCG_STRICT_SCHEMA`, `CCG_PRIMARY_COLOR`, `CCG_SECONDARY_COLOR`,
+`CCG_MAX_HEADER_LEN`, `CCG_COUNTDOWN_SECONDS`, `CCG_DEFAULTS`, and `CCG_TYPES`.
 
 
 ### Upgrade
@@ -114,6 +116,9 @@ immediately and is always reversible.
 | `enter` | Proceed: open the AI hint prompt (with AI) or jump to the Commit panel |
 
 **Commit panel** — the rendered commit message, edited with a keypress per part.
+The header line is colour-coded by length: green up to 50 characters, yellow past
+50, red once it exceeds the configured `max_header_len` (default 72); a `len/max`
+counter is shown next to it.
 
 | Key | Action |
 |-----|--------|
@@ -121,12 +126,17 @@ immediately and is always reversible.
 | `!` | Toggle breaking change |
 | `r` | (Re)generate from the diff via a hint prompt (only when AI is configured) |
 | `e` | Edit everything in one form |
+| `y` | Copy the commit message to the clipboard |
 | `c` | Create the commit |
 
 Editing any field opens a **popup modal**: type the value, `enter` to submit,
 `esc` to cancel. Multi-line body/footers take `alt+enter` (or `ctrl+j`) for a
 newline within the field. The **Footers** field takes one trailer per line, e.g.
 `Refs: #123`.
+
+**Commit & push are abortable.** Both run after a 5-second countdown — press `esc`
+during it to cancel (cancelling a push keeps the commit). Clipboard copy uses
+`wl-copy`, `xclip`, `xsel`, `pbcopy`, or `clip.exe`, whichever is available.
 
 Global keys everywhere: `tab` switch panel · `q` quit · `ctrl+c` abort (nothing
 is committed).
@@ -145,6 +155,7 @@ environment variable, and ccg reads the key from your environment at runtime.
 
 ```yaml
 defaults: true            # include the built-in commit types
+countdown_seconds: 3      # abortable delay before commit/push (0 = no countdown)
 provider:
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
@@ -185,13 +196,30 @@ Each value is a terminal color name (`black`, `red`, `green`, `yellow`, `blue`,
 
 ### Environment overrides
 
-`CCG_BASE_URL`, `CCG_MODEL`, `CCG_API_KEY_ENV`, `CCG_STRICT_SCHEMA` override the
-corresponding config values for a single run.
+Every config option has a `CCG_*` environment variable that overrides it for a
+single run (precedence: env > project > global > defaults):
+
+| Env var | Overrides |
+|---------|-----------|
+| `CCG_BASE_URL` | `provider.base_url` |
+| `CCG_MODEL` | `provider.model` |
+| `CCG_API_KEY_ENV` | `provider.api_key_env` |
+| `CCG_STRICT_SCHEMA` | `provider.strict_schema` (bool) |
+| `CCG_PRIMARY_COLOR` | `colors.primary` |
+| `CCG_SECONDARY_COLOR` | `colors.secondary` |
+| `CCG_MAX_HEADER_LEN` | `commit.max_header_len` (int) |
+| `CCG_COUNTDOWN_SECONDS` | `countdown_seconds` (int) |
+| `CCG_DEFAULTS` | `defaults` (bool) |
+| `CCG_TYPES` | `commit.types`, as `"name:desc;name:desc"` |
+
+`ccg config` prints each resolved value and where it came from (`default`,
+`global`, `project`, or `env`).
 
 ## How AI generation works
 
 ccg sends your **staged diff** (truncated to keep token cost down) plus your
-optional hint and the allowed commit types to the model, asking for a single JSON
+optional hint, the current **branch name** (for extra context, e.g. a ticket id),
+and the allowed commit types to the model, asking for a single JSON
 object describing the commit. The response is parsed defensively (code fences and
 surrounding prose are tolerated); if parsing or the request fails, the workflow
 degrades gracefully to manual editing rather than aborting. The draft always lands
