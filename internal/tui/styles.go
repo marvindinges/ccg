@@ -37,13 +37,12 @@ var (
 	colGreen = lipgloss.Color("42")
 	colRed   = lipgloss.Color("203")
 	colYell  = lipgloss.Color("221")
-	colDim   = lipgloss.Color("240")
+	// Inactive/dim elements (unfocused panel borders, placeholders, hint
+	// brackets). A bit brighter than the old 240 so inactive panels read clearly.
+	colDim = lipgloss.Color("245")
 
-	// Footer bar (keybinding hints). A solid background keeps the hints readable
-	// on transparent terminals; brighter text than the dim default for contrast.
-	colFooterBg  = lipgloss.Color("236")
-	colFooterFg  = lipgloss.Color("252")
-	colFooterDim = lipgloss.Color("245")
+	// Footer hint label color, brighter than dim for readability.
+	colFooterFg = lipgloss.Color("252")
 )
 
 // ansiNames maps terminal color names to ANSI palette indices, so a config of
@@ -135,24 +134,22 @@ func (s styles) loading(frame int, label string) string {
 	return sp + " " + b.String() + dim.Render(dots)
 }
 
-// key renders one "[t] type" keybinding chip with the footer background, so the
-// whole footer reads as a solid bar even on a transparent terminal.
+// key renders one "[t] type" keybinding chip as plain text (no background bar),
+// to match the bordered, borderless-footer panel styling: dim brackets, an
+// accent key, and a readable label.
 func (s styles) key(k, label string) string {
-	keySt := lipgloss.NewStyle().Foreground(s.secondary).Bold(true).Background(colFooterBg)
-	brk := lipgloss.NewStyle().Foreground(colFooterDim).Background(colFooterBg)
-	lbl := lipgloss.NewStyle().Foreground(colFooterFg).Background(colFooterBg)
+	keySt := lipgloss.NewStyle().Foreground(s.secondary).Bold(true)
+	brk := lipgloss.NewStyle().Foreground(colDim)
+	lbl := lipgloss.NewStyle().Foreground(colFooterFg)
 	return brk.Render("[") + keySt.Render(k) + brk.Render("] ") + lbl.Render(label)
 }
 
-// footerBar joins keybinding chips into a single background bar (with padding),
-// so the separators and edges share the chips' background.
+// footerBar joins keybinding chips into one borderless line with a small indent.
 func (s styles) footerBar(parts []string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	sep := lipgloss.NewStyle().Background(colFooterBg).Render("  ")
-	line := strings.Join(parts, sep)
-	return lipgloss.NewStyle().Background(colFooterBg).Padding(0, 1).Render(line)
+	return " " + strings.Join(parts, "  ")
 }
 
 // hints renders a form's active keybindings as a footer bar in the same
@@ -216,7 +213,7 @@ func (s styles) panelBox(title, content string, outerW, outerH int, active bool)
 
 	var out strings.Builder
 
-	// Top border: ┌─ Title ──────────────┐
+	// Top border: ╭─ Title ──────────────╮
 	titlePart := "─ " + title + " "
 	titleRunes := []rune(titlePart)
 	fill := innerW - len(titleRunes)
@@ -225,9 +222,9 @@ func (s styles) panelBox(title, content string, outerW, outerH int, active bool)
 		titleRunes = titleRunes[:innerW]
 		titlePart = string(titleRunes)
 	}
-	out.WriteString(borderSt.Render("┌"))
+	out.WriteString(borderSt.Render("╭"))
 	out.WriteString(titleSt.Render(titlePart))
-	out.WriteString(borderSt.Render(strings.Repeat("─", fill) + "┐"))
+	out.WriteString(borderSt.Render(strings.Repeat("─", fill) + "╮"))
 	out.WriteString("\n")
 
 	// Content rows
@@ -242,17 +239,16 @@ func (s styles) panelBox(title, content string, outerW, outerH int, active bool)
 		out.WriteString(lb + line + strings.Repeat(" ", innerW-visW) + rb + "\n")
 	}
 
-	// Bottom border: └──────────────────────┘
-	out.WriteString(borderSt.Render("└" + strings.Repeat("─", innerW) + "┘"))
+	// Bottom border: ╰──────────────────────╯
+	out.WriteString(borderSt.Render("╰" + strings.Repeat("─", innerW) + "╯"))
 
 	return out.String()
 }
 
-// footerBarSplit renders a footer bar with a global section and a panel-specific
-// section separated by a dim vertical bar. Either section may be empty.
+// footerBarSplit renders a borderless footer line with a global section and a
+// panel-specific section separated by a dim vertical bar. Either may be empty.
 func (s styles) footerBarSplit(global, panel []string) string {
-	sep := lipgloss.NewStyle().Background(colFooterBg).Render("  ")
-	divider := lipgloss.NewStyle().Foreground(colFooterDim).Background(colFooterBg).Render("│")
+	divider := lipgloss.NewStyle().Foreground(colDim).Render("│")
 
 	all := make([]string, 0, len(global)+1+len(panel))
 	all = append(all, global...)
@@ -263,8 +259,7 @@ func (s styles) footerBarSplit(global, panel []string) string {
 	if len(all) == 0 {
 		return ""
 	}
-	line := strings.Join(all, sep)
-	return lipgloss.NewStyle().Background(colFooterBg).Padding(0, 1).Render(line)
+	return " " + strings.Join(all, "  ")
 }
 
 // huhTheme is huh's Charm theme recolored so the focused field's accents use

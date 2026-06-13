@@ -5,10 +5,11 @@ with **optional** AI generation.
 written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) v2 and
 [huh](https://github.com/charmbracelet/huh).
 
-- **Guided commit flow:** select files → (optional) hint → (optional) AI draft →
-  review hub (edit any part with a keypress, or commit) → (optional) push.
+- **Panel workflow:** a lazygit-style layout — a **Files** panel (stage individual
+  files or whole folders) beside a **Commit** review panel you edit via popup
+  modals — with optional AI drafting and an optional push at the end.
 - **You always verify.** AI output is never committed without you reviewing and
-  editing it in the form first.
+  editing it in the Commit panel first.
 - **Works with no AI at all (manual).** With no provider configured, ccg is a fully manual
   guided Conventional Commits tool.
 - **Bring your own provider.** works with `/chat/completions` API — configurable **per project**.
@@ -80,7 +81,7 @@ Flags:
 | Flag | Description |
 |------|-------------|
 | `--no-ai` | Force manual mode even if a provider is configured |
-| `--hint "..."` | Provide the natural-language hint up front (skips the hint prompt) |
+| `--hint "..."` | Pre-fill the natural-language AI hint (the hint prompt opens pre-filled) |
 | `--all` | Pre-select all changed files for staging |
 | `--push` | Push automatically after committing |
 | `--no-push` | Skip the push step |
@@ -96,31 +97,39 @@ ccg upgrade       # pull the latest source and rebuild (see Upgrade below)
 ccg version
 ```
 
-### The review hub
+### The interface
 
-After a commit is drafted (by AI, or after you fill the manual form), ccg shows a
-**review hub**: the rendered commit message plus keybindings to jump straight to
-any part — no need to walk through every field. From the hub:
+ccg opens a two-panel layout. Press `tab` to switch panels; the focused panel
+expands and the other collapses to a one-line summary.
+
+**Files panel** — choose what to commit. Files are grouped into a folder tree, so
+you can stage a single file or a whole folder at once. Staging is applied to git
+immediately and is always reversible.
 
 | Key | Action |
 |-----|--------|
-| `enter` | Create the commit |
+| `↑` / `↓` | Move the cursor |
+| `space` | Stage / unstage the file or folder under the cursor |
+| `a` | Stage / unstage everything |
+| `enter` | Proceed: open the AI hint prompt (with AI) or jump to the Commit panel |
+
+**Commit panel** — the rendered commit message, edited with a keypress per part.
+
+| Key | Action |
+|-----|--------|
 | `t` / `s` / `d` / `b` / `f` | Edit type / scope / description / body / footers |
 | `!` | Toggle breaking change |
-| `r` | Regenerate from the diff (only when AI is configured) |
-| `e` | Edit everything (the full step-by-step form) |
-| `q` / `esc` | Cancel |
+| `r` | (Re)generate from the diff via a hint prompt (only when AI is configured) |
+| `e` | Edit everything in one form |
+| `c` | Create the commit |
 
-### Keybindings (in the forms)
+Editing any field opens a **popup modal**: type the value, `enter` to submit,
+`esc` to cancel. Multi-line body/footers take `alt+enter` (or `ctrl+j`) for a
+newline within the field. The **Footers** field takes one trailer per line, e.g.
+`Refs: #123`.
 
-- **Select files:** `space` (or `x`) to toggle, `enter` to confirm.
-- **Move between fields:** `enter` or `tab` (and `shift+tab` to go back). The form
-  is paginated, so you see one short page at a time.
-- **Multi-line body/footers:** `enter` advances to the next field; use
-  `alt+enter` (or `ctrl+j`) to insert a newline within the body.
-- **Cancel anytime:** `ctrl+c` (nothing is committed).
-
-The **Footers** field takes one trailer per line, e.g. `Refs: #123`.
+Global keys everywhere: `tab` switch panel · `q` quit · `ctrl+c` abort (nothing
+is committed).
 
 ## Configuration
 
@@ -186,7 +195,7 @@ optional hint and the allowed commit types to the model, asking for a single JSO
 object describing the commit. The response is parsed defensively (code fences and
 surrounding prose are tolerated); if parsing or the request fails, the workflow
 degrades gracefully to manual editing rather than aborting. The draft always lands
-in the editable review form before anything is committed.
+in the editable Commit panel before anything is committed.
 
 ## Development
 
@@ -278,3 +287,4 @@ go build -ldflags "-X github.com/marvindinges/ccg/internal/cmd.Version=$(git des
 - `internal/ai` — OpenAI-compatible client, prompt building, defensive JSON parsing.
 - `internal/tui` — Bubble Tea model and the step-by-step flow.
 - `internal/cmd` — cobra CLI wiring.
+

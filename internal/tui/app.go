@@ -295,14 +295,30 @@ func (m Model) onStaged(msg stagedMsg) (tea.Model, tea.Cmd) {
 
 // toggleStage flips the staged state of the file under the cursor and applies it
 // to git immediately, refreshing the diff.
-func (m Model) toggleStage(path string) (tea.Model, tea.Cmd) {
+// toggleRow stages or unstages every file in a row (one file, or a whole folder
+// for a directory row) and applies it to git immediately. A partially-staged
+// folder stages fully; a fully-staged one unstages.
+func (m Model) toggleRow(r fileRow) (tea.Model, tea.Cmd) {
 	m.notice = ""
-	on := !m.filesSelected[path]
-	m.filesSelected[path] = on
-	if on {
-		return m, reconcileStage(m.opts.Git, []string{path}, nil)
+	staged, total := m.rowStaged(r)
+	target := staged < total // not fully staged → stage all, else unstage all
+
+	var toStage, toUnstage []string
+	for _, p := range r.paths {
+		if m.filesSelected[p] == target {
+			continue
+		}
+		m.filesSelected[p] = target
+		if target {
+			toStage = append(toStage, p)
+		} else {
+			toUnstage = append(toUnstage, p)
+		}
 	}
-	return m, reconcileStage(m.opts.Git, nil, []string{path})
+	if len(toStage) == 0 && len(toUnstage) == 0 {
+		return m, nil
+	}
+	return m, reconcileStage(m.opts.Git, toStage, toUnstage)
 }
 
 // toggleStageAll stages every file if any is unstaged, otherwise unstages all.
@@ -377,9 +393,10 @@ func (m Model) cyclePanel(dir int) panel {
 // the cursor, space stages/unstages the file under it (applied to git right
 // away), a toggles all, and enter proceeds to writing the commit.
 func (m Model) handleFilesPanelKey(key string) (tea.Model, tea.Cmd) {
+	rows := m.fileRows()
 	switch key {
 	case "j", "down":
-		if m.filesCursor < len(m.files)-1 {
+		if m.filesCursor < len(rows)-1 {
 			m.filesCursor++
 		}
 	case "k", "up":
@@ -387,8 +404,8 @@ func (m Model) handleFilesPanelKey(key string) (tea.Model, tea.Cmd) {
 			m.filesCursor--
 		}
 	case " ", "space":
-		if len(m.files) > 0 {
-			return m.toggleStage(m.files[m.filesCursor].Path)
+		if m.filesCursor < len(rows) {
+			return m.toggleRow(rows[m.filesCursor])
 		}
 	case "a":
 		if len(m.files) > 0 {
@@ -634,9 +651,16 @@ func (m Model) formModalBox() string {
 		return ""
 	}
 	body := m.form.View()
-	if hints := m.styles.hints(m.form.KeyBinds()); hints != "" {
-		body += "\n\n" + hints
+	// Always advertise esc to abort; it's handled by us, not a huh keybinding,
+	// so it won't appear in the form's own hints.
+	hints := m.styles.hints(m.form.KeyBinds())
+	esc := m.styles.key("esc", "cancel")
+	if hints != "" {
+		hints += "  " + esc
+	} else {
+		hints = esc
 	}
+	body += "\n\n" + hints
 	if title := m.modalTitle(); title != "" {
 		body = m.styles.previewT.Render(title) + "\n\n" + body
 	}
@@ -779,24 +803,34 @@ func (m Model) renderFilesPanel(active bool, innerW, innerH int) (string, string
 		return title, m.styles.subtle.Render(fmt.Sprintf("%d staged", m.countStaged()))
 	}
 
-	if len(m.files) == 0 {
+	rows := m.fileRows()
+	if len(rows) == 0 {
 		return title, m.styles.subtle.Render("no changes")
 	}
 
 	var lines []string
-	for i, f := range m.files {
+	for i, r := range rows {
 		focused := i == m.filesCursor
-		cursor := "  "
-		check := "○"
-		if m.filesSelected[f.Path] {
-			check = "◉"
+		indent := strings.Repeat("  ", r.depth)
+
+		check := m.rowGlyph(r)
+		var label string
+		if r.isDir {
+			label = r.label
+		} else {
+			f := m.files[r.fileIdx]
+			label = fmt.Sprintf("[%s] %s", f.Label(), renameLabel(f, r.label))
 		}
+
+		cursor := "  "
 		if focused {
 			cursor = m.styles.editorFocused.Render("▶ ")
 			check = m.styles.editorFocused.Render(check)
+			label = m.styles.editorFocused.Render(label)
 		}
-		lines = append(lines, fmt.Sprintf("%s%s [%s] %s", cursor, check, f.Label(), displayPath(f)))
+		lines = append(lines, cursor+indent+check+" "+label)
 	}
+
 	start := m.filesScroll
 	if m.filesCursor < start {
 		start = m.filesCursor
@@ -805,6 +839,32 @@ func (m Model) renderFilesPanel(active bool, innerW, innerH int) (string, string
 		start = m.filesCursor - innerH + 1
 	}
 	return title, strings.Join(lines[start:min(start+innerH, len(lines))], "\n")
+}
+
+// rowGlyph is the staged indicator for a row: ◉ all, ○ none, ◐ partial (a
+// folder with only some of its files staged).
+func (m Model) rowGlyph(r fileRow) string {
+	staged, total := m.rowStaged(r)
+	switch {
+	case staged == 0:
+		return "○"
+	case staged == total:
+		return "◉"
+	default:
+		return "◐"
+	}
+}
+
+// renameLabel shows the basename, noting renames as "old → new" basenames.
+func renameLabel(f git.FileStatus, base string) string {
+	if f.OrigPath != "" {
+		old := f.OrigPath
+		if i := strings.LastIndexByte(old, '/'); i >= 0 {
+			old = old[i+1:]
+		}
+		return old + " → " + base
+	}
+	return base
 }
 
 func (m Model) renderEditorPanel(active bool, innerW, innerH int) (string, string) {

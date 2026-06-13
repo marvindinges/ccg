@@ -740,6 +740,10 @@ func TestEditOpensModalOverPanels(t *testing.T) {
 	if !strings.Contains(content, "Files") {
 		t.Error("panels should remain visible behind the popup modal")
 	}
+	// …and esc is advertised as the abort key.
+	if !strings.Contains(content, "esc") || !strings.Contains(content, "cancel") {
+		t.Error("modal should show the [esc] cancel hint")
+	}
 }
 
 func TestPreviewBoxShowsHeader(t *testing.T) {
@@ -758,8 +762,8 @@ func TestPanelBoxRendersTitle(t *testing.T) {
 	if !strings.Contains(box, "Files") {
 		t.Errorf("panel box should contain title, got:\n%s", box)
 	}
-	if !strings.Contains(box, "┌") || !strings.Contains(box, "└") {
-		t.Errorf("panel box should contain box-drawing chars, got:\n%s", box)
+	if !strings.Contains(box, "╭") || !strings.Contains(box, "╯") {
+		t.Errorf("panel box should contain rounded box-drawing chars, got:\n%s", box)
 	}
 }
 
