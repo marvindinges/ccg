@@ -1,7 +1,7 @@
-// Package tui implements the interactive Conventional Commits workflow with
-// Bubble Tea v2: select files -> (optional) hint -> (optional) AI generate ->
-// review/edit every segment -> confirm -> (optional) push. It works fully
-// without AI, in which case the review step starts blank (git-cm behavior).
+// Package tui implements the ccg workflow as a lazygit-style vertical accordion:
+// three stacked panels — Files, Hint (AI only), and Commit (a review hub showing
+// the rendered message with key-driven editing). The focused panel expands to
+// fill the height; the others collapse to a one-line summary. tab cycles focus.
 package tui
 
 import (
@@ -11,14 +11,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marvindinges/ccg/internal/ai"
 	"github.com/marvindinges/ccg/internal/commit"
 	"github.com/marvindinges/ccg/internal/config"
 	"github.com/marvindinges/ccg/internal/git"
 )
 
-// gitRunner is the subset of *git.Runner the TUI needs (an interface so tests
-// can inject fakes).
 type gitRunner interface {
 	Status() ([]git.FileStatus, error)
 	Stage(paths []string) error
@@ -31,7 +30,6 @@ type gitRunner interface {
 	CurrentBranch() (string, error)
 }
 
-// aiClient is the subset of *ai.Client the TUI needs (nil when no provider).
 type aiClient interface {
 	Suggest(ctx context.Context, in ai.SuggestInput) (commit.Commit, error)
 }
@@ -39,54 +37,65 @@ type aiClient interface {
 type step int
 
 const (
-	stepStage step = iota
-	stepHint
-	stepGenerate
-	stepReview  // full multi-field form (manual entry / "edit all")
-	stepEdit    // single-field edit launched from the summary
-	stepSummary // review hub: shows the draft + keybindings to edit/commit
-	stepPush
-	stepBusy
-	stepModal // dismissable overlay (e.g. AI-failure message), then continue
+	stepBusy   step = iota // status load / commit / push (full-screen spinner)
+	stepMain               // vertical accordion panel layout
+	stepEdit               // single-field huh form overlay (from a panel)
+	stepReview             // full multi-field huh form (via 'e')
+	stepModal              // dismissable AI-failure overlay
+	stepPush               // push-confirmation huh form
 	stepDone
 	stepError
+)
+
+type panel int
+
+const (
+	panelFiles  panel = iota
+	panelEditor       // the review hub
 )
 
 // Options configures a Model.
 type Options struct {
 	Cfg       config.Config
 	Git       gitRunner
-	AI        aiClient // nil disables AI generation
-	Hint      string   // preset hint (skips the hint step when non-empty)
-	SelectAll bool     // pre-select all changed files
-	AutoPush  bool     // push without asking
-	NoPush    bool     // skip the push step entirely
-	DryRun    bool     // render the message but don't commit
+	AI        aiClient
+	Hint      string
+	SelectAll bool
+	AutoPush  bool
+	NoPush    bool
+	DryRun    bool
 }
 
-// Model is the parent Bubble Tea model holding all step state.
+// Model is the parent Bubble Tea model.
 type Model struct {
 	opts   Options
 	styles styles
 
-	step     step
-	form     *huh.Form
-	files    []git.FileStatus
-	selected []string
-	hint     string
-	diff     string
-	draft    commit.Commit
+	step step
+	form *huh.Form
+
+	files         []git.FileStatus
+	filesSelected map[string]bool // staged intent, applied to git on toggle
+	filesCursor   int
+	filesScroll   int
+
+	generating bool
+	busyMsg    string
+
+	hint  string
+	diff  string // current staged diff (refreshed as files are staged/unstaged)
+	draft commit.Commit
 
 	width     int
 	height    int
-	frame     int    // animation tick counter for the loading view
-	editField string // which segment a single-field edit is editing
+	frame     int
+	editField string
 
-	busyText  string
-	notice    string // transient banner above a form (e.g. validation errors)
-	modalText string // body of the dismissable overlay (stepModal)
+	activePanel panel
 
-	// outcome
+	notice    string
+	modalText string
+
 	committed       bool
 	pushed          bool
 	pushSetUpstream bool
@@ -99,25 +108,32 @@ func New(opts Options) Model {
 	primary := parseColor(opts.Cfg.PrimaryColor())
 	secondary := parseColor(opts.Cfg.SecondaryColor())
 	return Model{
-		opts:     opts,
-		styles:   newStyles(primary, secondary),
-		hint:     opts.Hint,
-		step:     stepBusy,
-		busyText: "Loading changes…",
+		opts:          opts,
+		styles:        newStyles(primary, secondary),
+		hint:          opts.Hint,
+		step:          stepBusy,
+		filesSelected: make(map[string]bool),
+		busyMsg:       "Loading changes",
 	}
 }
 
-// styleForm applies the shared theme, width and (disabled) help to a form. huh's
-// built-in help is off; we render our own hint line (styles.hints) so it matches
-// the review hub's "[KEY] text" format on every stage.
 func (m Model) styleForm(f *huh.Form) *huh.Form {
-	return f.
-		WithTheme(m.styles.huhTheme()).
-		WithWidth(formWidth(m.width)).
-		WithShowHelp(false)
+	return f.WithTheme(m.styles.huhTheme()).WithWidth(modalFormWidth(m.width)).WithShowHelp(false)
 }
 
-// Run starts the program and returns the final model for summary printing.
+// modalFormWidth is the inner width of the huh form inside a popup modal: narrow
+// enough to leave a margin around the centered box on any reasonable terminal.
+func modalFormWidth(termW int) int {
+	w := termW - 12 // leave room for the border, padding, and a screen margin
+	if w > 60 {
+		w = 60
+	}
+	if w < 30 {
+		w = 30
+	}
+	return w
+}
+
 func Run(m Model) (Model, error) {
 	p := tea.NewProgram(m)
 	fm, err := p.Run()
@@ -128,7 +144,6 @@ func Run(m Model) (Model, error) {
 	return final, nil
 }
 
-// Outcome accessors used by the caller after Run.
 func (m Model) Committed() bool         { return m.committed }
 func (m Model) Pushed() bool            { return m.pushed }
 func (m Model) SetUpstream() bool       { return m.pushSetUpstream }
@@ -141,10 +156,32 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(tickAnim(), loadStatus(m.opts.Git))
 }
 
-// isLoading reports whether the current step shows the animated loader.
 func (m Model) isLoading() bool {
-	return m.step == stepGenerate || m.step == stepBusy
+	return m.step == stepBusy || (m.step == stepMain && m.generating)
 }
+
+// visiblePanels lists the panels in vertical order. The AI hint is collected via
+// a popup modal before generating, so there is no dedicated hint panel.
+func (m Model) visiblePanels() []panel {
+	return []panel{panelFiles, panelEditor}
+}
+
+// countStaged is how many files are currently marked staged.
+func (m Model) countStaged() int {
+	n := 0
+	for _, f := range m.files {
+		if m.filesSelected[f.Path] {
+			n++
+		}
+	}
+	return n
+}
+
+// hasStaged reports whether at least one file is staged (intent-based, so it is
+// true immediately on toggle without waiting for the async diff to load).
+func (m Model) hasStaged() bool { return m.countStaged() > 0 }
+
+// ── Update ────────────────────────────────────────────────────────────────────
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -152,7 +189,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.form != nil {
-			m.form = m.form.WithWidth(formWidth(m.width))
+			m.form = m.form.WithWidth(modalFormWidth(m.width))
 		}
 		return m, nil
 
@@ -161,14 +198,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.aborted = true
 			return m, tea.Quit
 		}
-		// The summary screen is key-driven (not a form).
-		if m.step == stepSummary {
-			return m.handleSummaryKey(msg.String())
+		if m.step == stepMain {
+			return m.handleMainKey(msg.String())
 		}
-		// Any key dismisses the overlay and continues to manual editing.
 		if m.step == stepModal {
 			m.modalText = ""
-			return m.enterReview()
+			m.step = stepMain
+			m.activePanel = panelEditor
+			return m, nil
+		}
+		// esc closes an open edit/review/push popup without quitting the app.
+		if hasForm(m.step) && msg.String() == "esc" {
+			return m.cancelModal()
 		}
 
 	case statusMsg:
@@ -178,13 +219,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onStaged(msg)
 
 	case draftMsg:
-		// After a successful AI draft, land on the summary hub (not the full form).
 		m.draft = msg.commit
-		return m.enterSummary()
+		m.generating = false
+		return m, nil
 
 	case aiErrMsg:
-		// Show the (often long) failure in a dismissable overlay; on any key we
-		// fall through to manual editing.
+		m.generating = false
 		m.modalText = msg.err.Error()
 		m.step = stepModal
 		m.form = nil
@@ -205,8 +245,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case animMsg:
-		// Advance the loader and keep ticking only while in a loading step, so
-		// the loop self-terminates and doesn't repaint forms.
 		if m.isLoading() {
 			m.frame++
 			return m, tickAnim()
@@ -214,7 +252,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Route everything else to the active form, if any.
 	if m.form != nil && hasForm(m.step) {
 		return m.updateForm(msg)
 	}
@@ -222,14 +259,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func hasForm(s step) bool {
-	switch s {
-	case stepStage, stepHint, stepReview, stepEdit, stepPush:
-		return true
-	}
-	return false
+	return s == stepReview || s == stepEdit || s == stepPush
 }
 
-// onStatus presents the file-selection form once status is loaded.
 func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
 	m.files = msg.files
 	if len(m.files) == 0 {
@@ -237,35 +269,64 @@ func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
 		m.step = stepError
 		return m, tea.Quit
 	}
-	m.form = m.styleForm(newStageForm(m.files, m.opts.SelectAll))
-	m.step = stepStage
-	return m, m.form.Init()
+	// Seed the staged intent from git (or stage everything with --all) and
+	// reconcile git to match, then load the resulting staged diff.
+	var toStage, toUnstage []string
+	for _, f := range m.files {
+		want := m.opts.SelectAll || f.IsStaged()
+		m.filesSelected[f.Path] = want
+		switch {
+		case want && !f.IsStaged():
+			toStage = append(toStage, f.Path)
+		case !want && f.IsStaged():
+			toUnstage = append(toUnstage, f.Path)
+		}
+	}
+	m.step = stepMain
+	return m, reconcileStage(m.opts.Git, toStage, toUnstage)
 }
 
-// onStaged advances past staging into hint/generate (AI) or review (manual).
+// onStaged refreshes the staged diff after any stage/unstage. It never changes
+// focus or triggers generation — staging is now incremental and reversible.
 func (m Model) onStaged(msg stagedMsg) (tea.Model, tea.Cmd) {
 	m.diff = msg.diff
-	if strings.TrimSpace(m.diff) == "" {
-		m.err = fmt.Errorf("nothing staged to commit")
-		m.step = stepError
-		return m, tea.Quit
-	}
-
-	if m.opts.AI == nil {
-		// Manual mode: straight to a blank review form.
-		return m.enterReview()
-	}
-	if strings.TrimSpace(m.hint) != "" {
-		// Hint preset via flag: skip the hint step.
-		return m.enterGenerate()
-	}
-	m.form = m.styleForm(newHintForm(m.hint))
-	m.step = stepHint
-	return m, m.form.Init()
+	return m, nil
 }
 
-func (m Model) enterGenerate() (tea.Model, tea.Cmd) {
-	m.step = stepGenerate
+// toggleStage flips the staged state of the file under the cursor and applies it
+// to git immediately, refreshing the diff.
+func (m Model) toggleStage(path string) (tea.Model, tea.Cmd) {
+	m.notice = ""
+	on := !m.filesSelected[path]
+	m.filesSelected[path] = on
+	if on {
+		return m, reconcileStage(m.opts.Git, []string{path}, nil)
+	}
+	return m, reconcileStage(m.opts.Git, nil, []string{path})
+}
+
+// toggleStageAll stages every file if any is unstaged, otherwise unstages all.
+func (m Model) toggleStageAll() (tea.Model, tea.Cmd) {
+	m.notice = ""
+	stageAll := m.countStaged() < len(m.files)
+	var toStage, toUnstage []string
+	for _, f := range m.files {
+		m.filesSelected[f.Path] = stageAll
+		if stageAll {
+			toStage = append(toStage, f.Path)
+		} else {
+			toUnstage = append(toUnstage, f.Path)
+		}
+	}
+	return m, reconcileStage(m.opts.Git, toStage, toUnstage)
+}
+
+// startGeneration kicks off an async AI suggestion using the current hint and
+// focuses the Commit panel so its spinner is visible.
+func (m Model) startGeneration() (tea.Model, tea.Cmd) {
+	m.generating = true
+	m.activePanel = panelEditor
+	m.busyMsg = "Generating commit message"
 	in := ai.SuggestInput{
 		Diff:         m.diff,
 		Hint:         m.hint,
@@ -275,63 +336,133 @@ func (m Model) enterGenerate() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tickAnim(), generate(m.opts.AI, in))
 }
 
-func (m Model) enterReview() (tea.Model, tea.Cmd) {
-	m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
-	m.step = stepReview
-	return m, m.form.Init()
-}
+// ── Panel key handling ────────────────────────────────────────────────────────
 
-// enterSummary shows the review hub: the rendered draft plus keybindings to
-// edit individual segments, toggle breaking, regenerate, or commit.
-func (m Model) enterSummary() (tea.Model, tea.Cmd) {
-	m.form = nil
-	m.step = stepSummary
-	return m, nil
-}
-
-// summaryKeys maps a pressed key to the segment field it edits.
-var summaryKeys = map[string]string{
-	"t": keyType,
-	"s": keyScope,
-	"d": keyDesc,
-	"b": keyBody,
-	"f": keyFooters,
-}
-
-// handleSummaryKey dispatches a keypress on the summary hub.
-func (m Model) handleSummaryKey(key string) (tea.Model, tea.Cmd) {
-	m.notice = ""
+func (m Model) handleMainKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
-	case "enter":
-		return m.commitFromSummary()
-	case "e": // edit everything via the full form
-		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
-		m.step = stepReview
-		return m, m.form.Init()
-	case "!": // toggle breaking change in place
-		m.draft.Breaking = !m.draft.Breaking
-		return m, nil
-	case "r": // regenerate from the diff (only when AI is configured)
-		if m.opts.AI != nil && strings.TrimSpace(m.diff) != "" {
-			return m.enterGenerate()
-		}
-		return m, nil
 	case "q", "esc":
 		m.aborted = true
 		return m, tea.Quit
+	case "tab":
+		m.activePanel = m.cyclePanel(1)
+		return m, nil
+	case "shift+tab":
+		m.activePanel = m.cyclePanel(-1)
+		return m, nil
 	}
-	if field, ok := summaryKeys[key]; ok {
-		m.editField = field
-		m.form = m.styleForm(newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes()))
-		m.step = stepEdit
-		return m, m.form.Init()
+	switch m.activePanel {
+	case panelFiles:
+		return m.handleFilesPanelKey(key)
+	case panelEditor:
+		return m.handleEditorPanelKey(key)
 	}
 	return m, nil
 }
 
-// commitFromSummary validates the draft and creates the commit (or prints it on
-// a dry run). Fatal validation errors keep the user on the summary.
-func (m Model) commitFromSummary() (tea.Model, tea.Cmd) {
+// cyclePanel returns the panel `dir` steps away from the active one, wrapping.
+func (m Model) cyclePanel(dir int) panel {
+	vis := m.visiblePanels()
+	idx := 0
+	for i, p := range vis {
+		if p == m.activePanel {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + dir + len(vis)) % len(vis)
+	return vis[idx]
+}
+
+// handleFilesPanelKey drives the always-interactive Files panel: navigate with
+// the cursor, space stages/unstages the file under it (applied to git right
+// away), a toggles all, and enter proceeds to writing the commit.
+func (m Model) handleFilesPanelKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "j", "down":
+		if m.filesCursor < len(m.files)-1 {
+			m.filesCursor++
+		}
+	case "k", "up":
+		if m.filesCursor > 0 {
+			m.filesCursor--
+		}
+	case " ", "space":
+		if len(m.files) > 0 {
+			return m.toggleStage(m.files[m.filesCursor].Path)
+		}
+	case "a":
+		if len(m.files) > 0 {
+			return m.toggleStageAll()
+		}
+	case "enter":
+		if !m.hasStaged() {
+			m.notice = "Stage at least one file with [space]."
+			return m, nil
+		}
+		m.notice = ""
+		m.activePanel = panelEditor
+		// With AI, jump straight into the hint modal → generate on submit.
+		if m.opts.AI != nil {
+			return m.openFieldEdit(keyHint)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handleEditorPanelKey(key string) (tea.Model, tea.Cmd) {
+	if !m.hasStaged() || m.generating {
+		return m, nil
+	}
+	m.notice = ""
+	switch key {
+	case "t":
+		return m.openFieldEdit(keyType)
+	case "s":
+		return m.openFieldEdit(keyScope)
+	case "d", "enter":
+		return m.openFieldEdit(keyDesc)
+	case "b":
+		return m.openFieldEdit(keyBody)
+	case "f":
+		return m.openFieldEdit(keyFooters)
+	case "!":
+		m.draft.Breaking = !m.draft.Breaking
+	case "r":
+		if m.opts.AI != nil && strings.TrimSpace(m.diff) != "" {
+			// Pop the hint modal first; submitting it regenerates.
+			return m.openFieldEdit(keyHint)
+		}
+	case "e":
+		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
+		m.step = stepReview
+		return m, m.form.Init()
+	case "c":
+		return m.commitFromMain()
+	}
+	return m, nil
+}
+
+func (m Model) openFieldEdit(field string) (tea.Model, tea.Cmd) {
+	m.editField = field
+	var f *huh.Form
+	if field == keyHint {
+		v := m.hint
+		f = huh.NewForm(huh.NewGroup(
+			huh.NewInput().Key(keyHint).
+				Title("Hint for the AI (optional)").
+				Placeholder("e.g. fix race condition in the cache loader").
+				Value(&v),
+		))
+	} else {
+		f = newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes())
+	}
+	m.form = m.styleForm(f)
+	m.step = stepEdit
+	return m, m.form.Init()
+}
+
+func (m Model) commitFromMain() (tea.Model, tea.Cmd) {
 	errs := m.draft.Validate(m.opts.Cfg.AllowedTypes(), m.opts.Cfg.MaxHeaderLen())
 	if commit.HasFatal(errs) {
 		m.notice = "Fix the following before committing:\n" + formatErrors(errs)
@@ -341,12 +472,11 @@ func (m Model) commitFromSummary() (tea.Model, tea.Cmd) {
 		m.step = stepDone
 		return m, tea.Quit
 	}
-	m.busyText = "Creating commit…"
+	m.busyMsg = "Creating commit"
 	m.step = stepBusy
 	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
 }
 
-// onCommitted decides whether to push after a successful commit.
 func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 	m.committed = true
 	if m.opts.NoPush {
@@ -354,7 +484,7 @@ func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if m.opts.AutoPush {
-		m.busyText = "Pushing…"
+		m.busyMsg = "Pushing"
 		m.step = stepBusy
 		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 	}
@@ -364,7 +494,6 @@ func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 	return m, m.form.Init()
 }
 
-// updateForm forwards a message to the active form and reacts to completion.
 func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.form.Update(msg)
 	if f, ok := model.(*huh.Form); ok {
@@ -372,30 +501,38 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch m.form.State {
 	case huh.StateAborted:
-		m.aborted = true
-		return m, tea.Quit
+		// huh aborts (e.g. its own cancel key) close the popup, not the app.
+		return m.cancelModal()
 	case huh.StateCompleted:
 		return m.onFormComplete()
 	}
 	return m, cmd
 }
 
-// onFormComplete reads the finished form's values and advances the workflow.
+// cancelModal closes an edit/review/push popup and returns to the panel layout,
+// discarding any in-progress edit. Cancelling the push prompt finishes instead.
+func (m Model) cancelModal() (tea.Model, tea.Cmd) {
+	if m.step == stepPush {
+		m.step = stepDone
+		return m, tea.Quit
+	}
+	m.form = nil
+	m.editField = ""
+	m.notice = ""
+	m.step = stepMain
+	return m, nil
+}
+
 func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 	m.notice = ""
 	switch m.step {
-	case stepStage:
-		return m.completeStage()
-	case stepHint:
-		m.hint = m.form.GetString(keyHint)
-		return m.enterGenerate()
 	case stepReview:
 		return m.completeReview()
 	case stepEdit:
 		return m.completeEdit()
 	case stepPush:
 		if m.form.GetBool(keyConfirm) {
-			m.busyText = "Pushing…"
+			m.busyMsg = "Pushing"
 			m.step = stepBusy
 			return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 		}
@@ -403,33 +540,6 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
-}
-
-func (m Model) completeStage() (tea.Model, tea.Cmd) {
-	selected, _ := m.form.Get(keyFiles).([]string)
-	m.selected = selected
-
-	// Reconcile: unstage any previously-staged file the user deselected.
-	selectedSet := map[string]bool{}
-	for _, p := range selected {
-		selectedSet[p] = true
-	}
-	var toUnstage []string
-	for _, f := range m.files {
-		if f.IsStaged() && !selectedSet[f.Path] {
-			toUnstage = append(toUnstage, f.Path)
-		}
-	}
-
-	if len(selected) == 0 && len(toUnstage) == 0 {
-		m.notice = "Select at least one file."
-		m.form = m.styleForm(newStageForm(m.files, m.opts.SelectAll))
-		return m, m.form.Init()
-	}
-
-	m.busyText = "Staging files…"
-	m.step = stepBusy
-	return m, tea.Batch(tickAnim(), reconcileStage(m.opts.Git, selected, toUnstage))
 }
 
 func (m Model) completeReview() (tea.Model, tea.Cmd) {
@@ -441,11 +551,9 @@ func (m Model) completeReview() (tea.Model, tea.Cmd) {
 		Body:        strings.TrimRight(m.form.GetString(keyBody), "\n"),
 		Footers:     parseFooters(m.form.GetString(keyFooters)),
 	}
-
 	errs := m.draft.Validate(m.opts.Cfg.AllowedTypes(), m.opts.Cfg.MaxHeaderLen())
 	if commit.HasFatal(errs) {
 		m.notice = "Fix the following before committing:\n" + formatErrors(errs)
-		// Re-enter review, preserving the user's edits (seeded from m.draft).
 		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
 		m.step = stepReview
 		return m, m.form.Init()
@@ -453,14 +561,16 @@ func (m Model) completeReview() (tea.Model, tea.Cmd) {
 	if len(errs) > 0 {
 		m.notice = "Warnings:\n" + formatErrors(errs)
 	}
-
-	return m.enterSummary()
+	m.form = nil
+	m.step = stepMain
+	return m, nil
 }
 
-// completeEdit reads back the single segment edited from the summary and
-// returns to the summary hub.
 func (m Model) completeEdit() (tea.Model, tea.Cmd) {
-	switch m.editField {
+	field := m.editField
+	switch field {
+	case keyHint:
+		m.hint = m.form.GetString(keyHint)
 	case keyType:
 		m.draft.Type = m.form.GetString(keyType)
 	case keyScope:
@@ -473,111 +583,392 @@ func (m Model) completeEdit() (tea.Model, tea.Cmd) {
 		m.draft.Footers = parseFooters(m.form.GetString(keyFooters))
 	}
 	m.editField = ""
-	return m.enterSummary()
+	m.form = nil
+	m.step = stepMain
+
+	// Submitting a hint generates immediately — the user just expressed intent.
+	if field == keyHint && m.opts.AI != nil && m.hasStaged() && strings.TrimSpace(m.diff) != "" {
+		return m.startGeneration()
+	}
+	return m, nil
 }
 
+// ── View ─────────────────────────────────────────────────────────────────────
+
 func (m Model) View() tea.View {
-	// The overlay takes over the whole screen until dismissed.
-	if m.step == stepModal {
-		body := m.styles.modalTitle.Render("⚠  AI generation failed") + "\n\n" +
-			m.modalText + "\n\n" +
-			m.styles.subtle.Render("Press any key to write the message manually.")
-		return tea.NewView(m.styles.modal(m.width, m.height, body))
+	switch m.step {
+	case stepMain:
+		return tea.NewView(m.viewMain())
+	case stepEdit, stepReview, stepPush:
+		return tea.NewView(m.viewFormModal())
+	case stepModal:
+		return tea.NewView(m.viewErrorModal())
+	case stepBusy:
+		return tea.NewView(m.centered(m.styles.loading(m.frame, m.busyMsg)))
+	case stepDone:
+		return tea.NewView(m.centered(m.styles.success.Render("✓ Done.")))
+	case stepError:
+		body := ""
+		if m.err != nil {
+			body = m.styles.errBox.Render("Error: " + m.err.Error())
+		}
+		return tea.NewView(m.centered(body))
+	}
+	return tea.NewView("")
+}
+
+// viewFormModal overlays the active huh form as a centered popup on top of the
+// (dimmed) panel layout.
+func (m Model) viewFormModal() string {
+	box := m.formModalBox()
+	if m.width <= 0 || m.height <= 0 {
+		return box
+	}
+	return composeOverlay(m.viewMain(), box, m.width, m.height)
+}
+
+// formModalBox renders the active form (plus its key hints) inside a titled,
+// bordered popup box.
+func (m Model) formModalBox() string {
+	if m.form == nil {
+		return ""
+	}
+	body := m.form.View()
+	if hints := m.styles.hints(m.form.KeyBinds()); hints != "" {
+		body += "\n\n" + hints
+	}
+	if title := m.modalTitle(); title != "" {
+		body = m.styles.previewT.Render(title) + "\n\n" + body
+	}
+	return m.styles.popup(m.styles.primary, body)
+}
+
+// modalTitle is the heading shown at the top of an edit/review/push popup.
+func (m Model) modalTitle() string {
+	switch m.step {
+	case stepReview:
+		return "Edit commit"
+	case stepPush:
+		return "Push"
+	case stepEdit:
+		switch m.editField {
+		case keyHint:
+			return "Edit hint"
+		case keyType:
+			return "Edit type"
+		case keyScope:
+			return "Edit scope"
+		case keyDesc:
+			return "Edit description"
+		case keyBody:
+			return "Edit body"
+		case keyFooters:
+			return "Edit footers"
+		}
+	}
+	return ""
+}
+
+// viewErrorModal overlays the AI-failure message as a popup over the panels.
+func (m Model) viewErrorModal() string {
+	body := m.styles.modalTitle.Render("⚠  AI generation failed") + "\n\n" +
+		m.modalText + "\n\n" +
+		m.styles.subtle.Render("Press any key to continue.")
+	box := m.styles.popup(colRed, body)
+	if m.width <= 0 || m.height <= 0 {
+		return box
+	}
+	return composeOverlay(m.viewMain(), box, m.width, m.height)
+}
+
+// centered places body in the middle of the screen (used for full-screen
+// spinner / done / error states).
+func (m Model) centered(body string) string {
+	if m.width <= 0 || m.height <= 0 {
+		return body
+	}
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, body)
+}
+
+// composeOverlay draws box centered on top of base using lipgloss's layer
+// compositor, so the panels remain visible behind the popup.
+func composeOverlay(base, box string, termW, termH int) string {
+	bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+	x := max(0, (termW-bw)/2)
+	y := max(0, (termH-bh)/2)
+	bg := lipgloss.NewLayer(base).X(0).Y(0).Z(0)
+	fg := lipgloss.NewLayer(box).X(x).Y(y).Z(1)
+	return lipgloss.NewCompositor(bg, fg).Render()
+}
+
+// collapsedOuterH is the height of a collapsed panel: title + 1 summary line +
+// top/bottom borders.
+const collapsedOuterH = 3
+
+// viewMain renders the vertical accordion layout.
+func (m Model) viewMain() string {
+	if m.width == 0 {
+		return ""
 	}
 
 	var b strings.Builder
-	b.WriteString(m.styles.header(stepLabel(m.step)))
-	b.WriteString("\n\n")
 
+	noticeH := 0
 	if m.notice != "" {
 		style := m.styles.warnBox
-		if strings.HasPrefix(m.notice, "Fix the following") {
+		if strings.HasPrefix(m.notice, "Fix") {
 			style = m.styles.errBox
 		}
-		// Constrain to the content width so long notices wrap instead of clipping.
-		b.WriteString(style.Width(formWidth(m.width)).Render(m.notice))
+		noticeStr := style.Width(m.width - 2).Render(m.notice)
+		b.WriteString(noticeStr)
 		b.WriteString("\n\n")
+		noticeH = strings.Count(noticeStr, "\n") + 3
 	}
 
-	switch m.step {
-	case stepGenerate:
-		b.WriteString(m.styles.loading(m.frame, "Generating commit message"))
-	case stepBusy:
-		b.WriteString(m.styles.loading(m.frame, strings.TrimRight(m.busyText, "… ")))
-	case stepError:
-		if m.err != nil {
-			b.WriteString(m.styles.errBox.Render("Error: " + m.err.Error()))
-		}
-	case stepDone:
-		b.WriteString(m.styles.success.Render("✓ Done."))
-	case stepSummary:
-		b.WriteString(m.previewBox())
-		b.WriteString("\n\n")
-		b.WriteString(m.summaryLegend())
-	default:
-		if m.form != nil {
-			b.WriteString(m.form.View())
-			if hints := m.styles.hints(m.form.KeyBinds()); hints != "" {
-				b.WriteString("\n\n" + hints)
-			}
-		}
+	const footerLines = 1
+
+	vis := m.visiblePanels()
+	avail := m.height - noticeH - footerLines
+	minAvail := len(vis) * collapsedOuterH
+	if avail < minAvail {
+		avail = minAvail
 	}
 
-	v := tea.NewView(b.String())
-	return v
+	// The focused panel gets all the height the collapsed panels don't use.
+	focusedH := avail - collapsedOuterH*(len(vis)-1)
+	if focusedH < 4 {
+		focusedH = 4
+	}
+
+	var panels []string
+	for _, p := range vis {
+		active := p == m.activePanel
+		h := collapsedOuterH
+		if active {
+			h = focusedH
+		}
+		innerW := m.width - 2
+		innerH := h - 2
+		title, content := m.renderPanel(p, active, innerW, innerH)
+		panels = append(panels, m.styles.panelBox(title, content, m.width, h, active))
+	}
+
+	b.WriteString(strings.Join(panels, "\n"))
+	b.WriteString("\n")
+	b.WriteString(m.mainFooter())
+
+	return b.String()
 }
 
-// previewBox renders the current draft commit message in a bordered box.
+// renderPanel returns the (title, content) for one panel. Collapsed (inactive)
+// panels return a one-line summary; the focused panel returns full content.
+func (m Model) renderPanel(p panel, active bool, innerW, innerH int) (string, string) {
+	switch p {
+	case panelFiles:
+		return m.renderFilesPanel(active, innerW, innerH)
+	case panelEditor:
+		return m.renderEditorPanel(active, innerW, innerH)
+	}
+	return "", ""
+}
+
+func (m Model) renderFilesPanel(active bool, innerW, innerH int) (string, string) {
+	title := fmt.Sprintf("Files (%d/%d staged)", m.countStaged(), len(m.files))
+
+	if !active {
+		return title, m.styles.subtle.Render(fmt.Sprintf("%d staged", m.countStaged()))
+	}
+
+	if len(m.files) == 0 {
+		return title, m.styles.subtle.Render("no changes")
+	}
+
+	var lines []string
+	for i, f := range m.files {
+		focused := i == m.filesCursor
+		cursor := "  "
+		check := "○"
+		if m.filesSelected[f.Path] {
+			check = "◉"
+		}
+		if focused {
+			cursor = m.styles.editorFocused.Render("▶ ")
+			check = m.styles.editorFocused.Render(check)
+		}
+		lines = append(lines, fmt.Sprintf("%s%s [%s] %s", cursor, check, f.Label(), displayPath(f)))
+	}
+	start := m.filesScroll
+	if m.filesCursor < start {
+		start = m.filesCursor
+	}
+	if m.filesCursor >= start+innerH {
+		start = m.filesCursor - innerH + 1
+	}
+	return title, strings.Join(lines[start:min(start+innerH, len(lines))], "\n")
+}
+
+func (m Model) renderEditorPanel(active bool, innerW, innerH int) (string, string) {
+	title := "Commit"
+
+	if m.generating {
+		if !active {
+			return title, m.styles.subtle.Render("generating…")
+		}
+		return title, m.styles.loading(m.frame, m.busyMsg)
+	}
+
+	if !m.hasStaged() {
+		if !active {
+			return title, m.styles.subtle.Render("(stage files first)")
+		}
+		return title, m.styles.subtle.Render("Stage files to start writing the commit.")
+	}
+
+	preview, placeholder := m.editorPreview()
+
+	if !active {
+		line := preview
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+		line = clipLine(line, innerW)
+		if placeholder {
+			return title, m.styles.subtle.Render(line)
+		}
+		return title, m.styles.editorNormal.Render(line)
+	}
+
+	content := wrapClip(preview, innerW, innerH)
+	if placeholder {
+		content = m.styles.subtle.Render(content)
+	}
+	return title, content
+}
+
+// editorPreview returns the commit message to show in the Commit panel. When the
+// draft is incomplete it returns a skeleton like "TYPE(SCOPE): DESCRIPTION" with
+// placeholders for the missing required segments (placeholder=true).
+func (m Model) editorPreview() (string, bool) {
+	c := m.draft
+	if c.Type != "" && c.Description != "" {
+		return strings.TrimRight(c.Render(), "\n"), false
+	}
+
+	typ := c.Type
+	if typ == "" {
+		typ = "TYPE"
+	}
+	scope := "(SCOPE)"
+	if c.Scope != "" {
+		scope = "(" + c.Scope + ")"
+	}
+	bang := ""
+	if c.Breaking {
+		bang = "!"
+	}
+	desc := c.Description
+	if desc == "" {
+		desc = "DESCRIPTION"
+	}
+	parts := []string{typ + scope + bang + ": " + desc}
+	if c.Body != "" {
+		parts = append(parts, "", c.Body)
+	}
+	if len(c.Footers) > 0 {
+		parts = append(parts, "", footersToText(c.Footers))
+	}
+	return strings.Join(parts, "\n"), true
+}
+
+// mainFooter renders the two-section footer: global | active-panel keybinds.
+func (m Model) mainFooter() string {
+	global := []string{
+		m.styles.key("tab", "switch panel"),
+		m.styles.key("q", "quit"),
+	}
+
+	var pk []string
+	switch m.activePanel {
+	case panelFiles:
+		pk = []string{
+			m.styles.key("↑/↓", "navigate"),
+			m.styles.key("space", "stage/unstage"),
+			m.styles.key("a", "all"),
+		}
+		proceed := "write commit"
+		if m.opts.AI != nil {
+			proceed = "generate"
+		}
+		pk = append(pk, m.styles.key("↵", proceed))
+	case panelEditor:
+		if m.hasStaged() && !m.generating {
+			pk = []string{
+				m.styles.key("t", "type"),
+				m.styles.key("s", "scope"),
+				m.styles.key("d", "description"),
+				m.styles.key("b", "body"),
+				m.styles.key("f", "footers"),
+				m.styles.key("!", "breaking"),
+			}
+			if m.opts.AI != nil {
+				pk = append(pk, m.styles.key("r", "regenerate"))
+			}
+			pk = append(pk,
+				m.styles.key("e", "edit all"),
+				m.styles.key("c", "commit"),
+			)
+		}
+	}
+
+	return m.styles.footerBarSplit(global, pk)
+}
+
+// previewBox is kept for tests.
 func (m Model) previewBox() string {
 	msg := strings.TrimRight(m.draft.Render(), "\n")
 	title := m.styles.previewT.Render("Commit preview")
 	return title + "\n" + m.styles.preview.Render(msg)
 }
 
-// summaryLegend renders the keybinding hints shown on the summary hub.
-func (m Model) summaryLegend() string {
-	commitLabel := "commit"
-	if m.opts.DryRun {
-		commitLabel = "print & exit"
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// wrapClip word-wraps s to width w and clips to at most h lines.
+func wrapClip(s string, w, h int) string {
+	if w < 1 {
+		w = 1
 	}
-	breaking := "mark breaking"
-	if m.draft.Breaking {
-		breaking = "unmark breaking"
+	wrapped := lipgloss.NewStyle().Width(w).Render(s)
+	lines := strings.Split(wrapped, "\n")
+	if h > 0 && len(lines) > h {
+		lines = lines[:h]
 	}
-	hints := []string{
-		m.styles.key("↵", commitLabel),
-		m.styles.key("t", "type"),
-		m.styles.key("s", "scope"),
-		m.styles.key("d", "description"),
-		m.styles.key("b", "body"),
-		m.styles.key("f", "footers"),
-		m.styles.key("!", breaking),
-	}
-	if m.opts.AI != nil {
-		hints = append(hints, m.styles.key("r", "regenerate"))
-	}
-	hints = append(hints, m.styles.key("e", "edit all"), m.styles.key("q", "cancel"))
-	return m.styles.footerBar(hints)
+	return strings.Join(lines, "\n")
 }
+
+// clipLine truncates a single line to w columns, adding an ellipsis if cut.
+func clipLine(s string, w int) string {
+	if w < 1 || lipgloss.Width(s) <= w {
+		return s
+	}
+	if w <= 1 {
+		return "…"
+	}
+	return lipgloss.NewStyle().MaxWidth(w-1).Render(s) + "…"
+}
+
 
 func stepLabel(s step) string {
 	switch s {
-	case stepStage:
-		return "stage files"
-	case stepHint:
-		return "describe (optional)"
-	case stepGenerate:
-		return "generating"
+	case stepBusy:
+		return "working"
+	case stepMain:
+		return "commit"
 	case stepReview:
 		return "edit all"
 	case stepEdit:
 		return "edit"
-	case stepSummary:
-		return "review"
 	case stepPush:
 		return "push"
-	case stepBusy:
-		return "working"
 	case stepDone:
 		return "done"
 	case stepError:

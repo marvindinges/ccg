@@ -24,6 +24,10 @@ type styles struct {
 	preview    lipgloss.Style
 	previewT   lipgloss.Style
 	modalTitle lipgloss.Style
+
+	// Panel editor row styles
+	editorFocused lipgloss.Style // focused field row (bold, secondary color)
+	editorNormal  lipgloss.Style // unfocused field row
 }
 
 // Fixed semantic colors (not user-configurable). White is the terminal's bright
@@ -92,6 +96,9 @@ func newStyles(primary, secondary color.Color) styles {
 			Padding(0, 1),
 		previewT:   lipgloss.NewStyle().Foreground(primary).Bold(true),
 		modalTitle: lipgloss.NewStyle().Foreground(colRed).Bold(true),
+
+		editorFocused: lipgloss.NewStyle().Foreground(secondary).Bold(true),
+		editorNormal:  lipgloss.NewStyle().Foreground(colFooterFg),
 	}
 }
 
@@ -168,36 +175,96 @@ func (s styles) hints(bindings []key.Binding) string {
 	return s.footerBar(parts)
 }
 
-// modal renders body inside a bordered panel centered over a width×height area —
-// a simple overlay used for AI errors so long messages wrap and stay readable.
-func (s styles) modal(width, height int, body string) string {
-	boxWidth := 64
-	if width > 0 && width-8 < boxWidth {
-		boxWidth = width - 8
-	}
-	if boxWidth < 24 {
-		boxWidth = 24
-	}
-	box := lipgloss.NewStyle().
+// popup renders body inside a rounded, padded box with the given border color —
+// the bordered surface for the edit/review/push/error popups, which are then
+// composited over the panel layout by the caller.
+func (s styles) popup(border color.Color, body string) string {
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colRed).
+		BorderForeground(border).
 		Padding(1, 2).
-		Width(boxWidth).
 		Render(body)
-	if width <= 0 || height <= 0 {
-		return box
-	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// header renders two badges: the "ccg" mark and the current step, styled
-// alike (bold light text on a colored background) but in different colors.
-func (s styles) header(stepLabel string) string {
-	out := s.logo.Render("ccg")
-	if stepLabel != "" {
-		out += " " + s.stage.Render(stepLabel)
+// panelBox renders a titled panel with box-drawing border characters.
+// Active panels use the primary accent color; inactive panels use the dim color.
+// The title appears in the top border: ┌─ Title ──────────┐
+func (s styles) panelBox(title, content string, outerW, outerH int, active bool) string {
+	if outerW < 4 || outerH < 3 {
+		return ""
 	}
-	return out
+
+	var borderColor color.Color = colDim
+	if active {
+		borderColor = s.primary
+	}
+	borderSt := lipgloss.NewStyle().Foreground(borderColor)
+	titleSt := lipgloss.NewStyle().Foreground(borderColor)
+	if active {
+		titleSt = titleSt.Bold(true)
+	}
+
+	innerW := outerW - 2 // subtract left + right border chars
+	innerH := outerH - 2 // subtract top + bottom border rows
+
+	// Clamp content to innerH lines, padding short content with empty lines.
+	lines := strings.Split(content, "\n")
+	for len(lines) < innerH {
+		lines = append(lines, "")
+	}
+	lines = lines[:innerH]
+
+	var out strings.Builder
+
+	// Top border: ┌─ Title ──────────────┐
+	titlePart := "─ " + title + " "
+	titleRunes := []rune(titlePart)
+	fill := innerW - len(titleRunes)
+	if fill < 0 {
+		fill = 0
+		titleRunes = titleRunes[:innerW]
+		titlePart = string(titleRunes)
+	}
+	out.WriteString(borderSt.Render("┌"))
+	out.WriteString(titleSt.Render(titlePart))
+	out.WriteString(borderSt.Render(strings.Repeat("─", fill) + "┐"))
+	out.WriteString("\n")
+
+	// Content rows
+	lb := borderSt.Render("│")
+	rb := borderSt.Render("│")
+	for _, line := range lines {
+		visW := lipgloss.Width(line)
+		if visW > innerW {
+			line = lipgloss.NewStyle().MaxWidth(innerW).Render(line)
+			visW = innerW
+		}
+		out.WriteString(lb + line + strings.Repeat(" ", innerW-visW) + rb + "\n")
+	}
+
+	// Bottom border: └──────────────────────┘
+	out.WriteString(borderSt.Render("└" + strings.Repeat("─", innerW) + "┘"))
+
+	return out.String()
+}
+
+// footerBarSplit renders a footer bar with a global section and a panel-specific
+// section separated by a dim vertical bar. Either section may be empty.
+func (s styles) footerBarSplit(global, panel []string) string {
+	sep := lipgloss.NewStyle().Background(colFooterBg).Render("  ")
+	divider := lipgloss.NewStyle().Foreground(colFooterDim).Background(colFooterBg).Render("│")
+
+	all := make([]string, 0, len(global)+1+len(panel))
+	all = append(all, global...)
+	if len(panel) > 0 {
+		all = append(all, divider)
+		all = append(all, panel...)
+	}
+	if len(all) == 0 {
+		return ""
+	}
+	line := strings.Join(all, sep)
+	return lipgloss.NewStyle().Background(colFooterBg).Padding(0, 1).Render(line)
 }
 
 // huhTheme is huh's Charm theme recolored so the focused field's accents use
