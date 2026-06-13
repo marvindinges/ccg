@@ -405,31 +405,17 @@ func TestEditorQuickKeyOpensFieldForm(t *testing.T) {
 	}
 }
 
-func TestEditorEnterOpensDescription(t *testing.T) {
-	g := &fakeGit{}
-	m := baseModel(g, nil)
-	m.step = stepMain
-	m.activePanel = panelEditor
-	m = markStaged(m)
-	m.draft = commit.Commit{Type: "feat", Description: "x"}
-	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	got := out.(Model)
-	if got.step != stepEdit || got.editField != keyDesc {
-		t.Errorf("enter in review hub should open description edit, got step=%v field=%q", got.step, got.editField)
-	}
-}
-
-func TestEditorCommitKey(t *testing.T) {
-	g := &fakeGit{}
-	m := baseModel(g, nil)
-	m.step = stepMain
-	m.activePanel = panelEditor
-	m = markStaged(m)
-	m.draft = commit.Commit{Type: "feat", Description: "do thing"}
-	out, cmd := m.Update(tea.KeyPressMsg{Code: 'c'})
-	got := out.(Model)
-	if got.step != stepCountdown || got.countdownPush || cmd == nil {
-		t.Errorf("'c' should start a commit countdown, got step=%v push=%v", got.step, got.countdownPush)
+// Both c and enter in the Commit panel start the commit flow by asking whether
+// to push (the push decision comes before anything runs).
+func TestEditorCommitKeysOpenPushModal(t *testing.T) {
+	for _, code := range []rune{'c', tea.KeyEnter} {
+		m := stagedModel(&fakeGit{}, nil)
+		m.draft = commit.Commit{Type: "feat", Description: "do thing"}
+		out, cmd := m.Update(tea.KeyPressMsg{Code: code})
+		got := out.(Model)
+		if got.step != stepPush || got.form == nil || cmd == nil {
+			t.Errorf("key %q should open the push modal, got step=%v", string(code), got.step)
+		}
 	}
 }
 
@@ -531,50 +517,82 @@ func TestAIErrorShowsOverlayThenResumes(t *testing.T) {
 	}
 }
 
-func TestOnCommittedNoPushFinishes(t *testing.T) {
+// onCommitted pushes when that was chosen, else finishes.
+func TestOnCommittedPushesWhenChosen(t *testing.T) {
+	g := &fakeGit{}
+	push := stagedModel(g, nil)
+	push.willPush = true
+	out, _ := push.Update(committedMsg{})
+	if out.(Model).step != stepBusy {
+		t.Errorf("willPush=true should push (busy), got step=%v", out.(Model).step)
+	}
+
+	noPush := stagedModel(g, nil)
+	noPush.willPush = false
+	out2, _ := noPush.Update(committedMsg{})
+	if got := out2.(Model); !got.committed || got.step != stepDone {
+		t.Errorf("willPush=false should finish, got step=%v", got.step)
+	}
+}
+
+// --no-push skips the push modal and goes straight to the countdown (no push).
+func TestCommitNoPushSkipsModal(t *testing.T) {
 	g := &fakeGit{}
 	m := New(Options{Cfg: config.Config{}, Git: g, NoPush: true})
-	out, _ := m.Update(committedMsg{})
+	m.step, m.activePanel = stepMain, panelEditor
+	m = markStaged(m)
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'c'})
 	got := out.(Model)
-	if !got.committed || got.step != stepDone {
-		t.Errorf("expected done after NoPush commit, got step=%v", got.step)
+	if got.step != stepCountdown || got.willPush {
+		t.Errorf("--no-push should count down without pushing, got step=%v willPush=%v", got.step, got.willPush)
 	}
 }
 
-// After committing, ccg enters the abortable push countdown (covers both the
-// default flow and --push).
-func TestOnCommittedStartsPushCountdown(t *testing.T) {
-	for _, autoPush := range []bool{false, true} {
-		g := &fakeGit{}
-		m := New(Options{Cfg: config.Config{}, Git: g, AutoPush: autoPush})
-		out, cmd := m.Update(committedMsg{})
-		got := out.(Model)
-		if got.step != stepCountdown || !got.countdownPush || got.countdownN != config.DefaultCountdownSeconds {
-			t.Errorf("autoPush=%v: expected push countdown, got step=%v push=%v n=%d",
-				autoPush, got.step, got.countdownPush, got.countdownN)
-		}
-		if cmd == nil {
-			t.Errorf("autoPush=%v: expected a countdown tick command", autoPush)
-		}
+// --push skips the modal and counts down with push intent.
+func TestCommitAutoPushSkipsModal(t *testing.T) {
+	g := &fakeGit{}
+	m := New(Options{Cfg: config.Config{}, Git: g, AutoPush: true})
+	m.step, m.activePanel = stepMain, panelEditor
+	m = markStaged(m)
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'c'})
+	got := out.(Model)
+	if got.step != stepCountdown || !got.willPush {
+		t.Errorf("--push should count down with push intent, got step=%v willPush=%v", got.step, got.willPush)
 	}
 }
 
-// Committing from the panel starts a commit countdown rather than committing
-// immediately.
-func TestCommitStartsCountdown(t *testing.T) {
+// Answering the push modal records the choice and starts the countdown.
+func TestPushModalThenCountdown(t *testing.T) {
 	m := stagedModel(&fakeGit{}, nil)
-	m.draft = commit.Commit{Type: "feat", Description: "do thing"}
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
+	out, _ := m.Update(tea.KeyPressMsg{Code: 'c'}) // -> push modal
+	got := out.(Model)
+	// Decline (form's confirm defaults to false) and complete the form.
+	done, _ := got.onFormComplete()
+	res := done.(Model)
+	if res.step != stepCountdown || res.willPush || res.countdownN != config.DefaultCountdownSeconds {
+		t.Errorf("answering push should start the countdown, got step=%v willPush=%v n=%d", res.step, res.willPush, res.countdownN)
+	}
+}
+
+// countdown_seconds: 0 commits immediately after the push decision.
+func TestCountdownZeroIsImmediate(t *testing.T) {
+	zero := 0
+	g := &fakeGit{}
+	m := New(Options{Cfg: config.Config{Countdown: &zero}, Git: g, NoPush: true})
+	m.step, m.activePanel = stepMain, panelEditor
+	m = markStaged(m)
+	m.draft = commit.Commit{Type: "feat", Description: "x"}
 	out, cmd := m.Update(tea.KeyPressMsg{Code: 'c'})
 	got := out.(Model)
-	if got.step != stepCountdown || got.countdownPush {
-		t.Errorf("'c' should start a commit countdown, got step=%v push=%v", got.step, got.countdownPush)
-	}
-	if cmd == nil {
-		t.Error("expected a countdown tick command")
+	if got.step != stepBusy || cmd == nil {
+		t.Errorf("countdown 0 should commit immediately (busy), got step=%v", got.step)
 	}
 }
 
-// The countdown fires the action when it reaches zero.
+// The countdown commits when it reaches zero.
 func TestCountdownFiresAtZero(t *testing.T) {
 	m := stagedModel(&fakeGit{}, nil)
 	m.draft = commit.Commit{Type: "feat", Description: "do thing"}
@@ -583,7 +601,7 @@ func TestCountdownFiresAtZero(t *testing.T) {
 	out, cmd := m.Update(countdownMsg{})
 	got := out.(Model)
 	if got.step != stepBusy || cmd == nil {
-		t.Errorf("countdown reaching zero should run the action (busy), got step=%v", got.step)
+		t.Errorf("countdown reaching zero should commit (busy), got step=%v", got.step)
 	}
 }
 
@@ -592,7 +610,6 @@ func TestCountdownEscCancelsCommit(t *testing.T) {
 	g := &fakeGit{}
 	m := stagedModel(g, nil)
 	m.step = stepCountdown
-	m.countdownPush = false
 	m.countdownN = 3
 	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got := out.(Model)
@@ -601,23 +618,6 @@ func TestCountdownEscCancelsCommit(t *testing.T) {
 	}
 	if g.committed != "" {
 		t.Error("nothing should have been committed")
-	}
-}
-
-// esc during the push countdown finishes (the commit already happened).
-func TestCountdownEscCancelsPush(t *testing.T) {
-	m := stagedModel(&fakeGit{}, nil)
-	m.committed = true
-	m.step = stepCountdown
-	m.countdownPush = true
-	m.countdownN = 3
-	out, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	got := out.(Model)
-	if got.step != stepDone {
-		t.Errorf("esc during push countdown should finish, got step=%v", got.step)
-	}
-	if got.pushed {
-		t.Error("push should not have happened")
 	}
 }
 

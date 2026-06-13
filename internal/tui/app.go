@@ -42,7 +42,8 @@ const (
 	stepEdit                  // single-field huh form overlay (from a panel)
 	stepReview                // full multi-field huh form (via 'e')
 	stepModal                 // dismissable AI-failure overlay
-	stepCountdown             // abortable 5s countdown before commit/push
+	stepCountdown             // abortable countdown before the commit
+	stepPush                  // push-confirmation modal (decide whether to push)
 	stepDone
 	stepError
 )
@@ -94,9 +95,9 @@ type Model struct {
 
 	activePanel panel
 
-	// Abortable countdown before a commit or push.
-	countdownN    int
-	countdownPush bool // false = pending commit, true = pending push
+	// Abortable countdown before the commit (and push, if chosen).
+	countdownN int
+	willPush   bool // whether to push after the commit (decided up front)
 
 	notice    string
 	modalText string
@@ -288,7 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func hasForm(s step) bool {
-	return s == stepReview || s == stepEdit
+	return s == stepReview || s == stepEdit || s == stepPush
 }
 
 func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
@@ -468,7 +469,7 @@ func (m Model) handleEditorPanelKey(key string) (tea.Model, tea.Cmd) {
 		return m.openFieldEdit(keyType)
 	case "s":
 		return m.openFieldEdit(keyScope)
-	case "d", "enter":
+	case "d":
 		return m.openFieldEdit(keyDesc)
 	case "b":
 		return m.openFieldEdit(keyBody)
@@ -487,7 +488,7 @@ func (m Model) handleEditorPanelKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.form.Init()
 	case "y":
 		return m, copyToClipboard(m.draft)
-	case "c":
+	case "c", "enter":
 		return m.commitFromMain()
 	}
 	return m, nil
@@ -512,6 +513,8 @@ func (m Model) openFieldEdit(field string) (tea.Model, tea.Cmd) {
 	return m, m.form.Init()
 }
 
+// commitFromMain validates the draft, then asks whether to push (the push
+// decision is made *before* anything runs) and proceeds to the countdown.
 func (m Model) commitFromMain() (tea.Model, tea.Cmd) {
 	errs := m.draft.Validate(m.opts.Cfg.AllowedTypes(), m.opts.Cfg.MaxHeaderLen())
 	if commit.HasFatal(errs) {
@@ -522,24 +525,37 @@ func (m Model) commitFromMain() (tea.Model, tea.Cmd) {
 		m.step = stepDone
 		return m, tea.Quit
 	}
-	return m.startCountdown(false) // commit
+	// Flags decide the push without asking; otherwise pop the push modal first.
+	if m.opts.NoPush {
+		m.willPush = false
+		return m.startCountdown()
+	}
+	if m.opts.AutoPush {
+		m.willPush = true
+		return m.startCountdown()
+	}
+	m.form = m.styleForm(newPushForm(m.branch))
+	m.step = stepPush
+	return m, m.form.Init()
 }
 
+// onCommitted runs after the commit lands: push if that was chosen, else finish.
 func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 	m.committed = true
-	if m.opts.NoPush {
-		m.step = stepDone
-		return m, tea.Quit
+	if m.willPush {
+		m.busyMsg = "Pushing"
+		m.step = stepBusy
+		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 	}
-	return m.startCountdown(true) // push
+	m.step = stepDone
+	return m, tea.Quit
 }
 
-// startCountdown enters the abortable window before a commit (push=false) or a
-// push (push=true). The action runs when it reaches zero unless esc cancels it.
-// A configured duration of 0 skips the countdown and runs the action at once.
-func (m Model) startCountdown(push bool) (tea.Model, tea.Cmd) {
+// startCountdown enters the abortable window before the commit (and push, if
+// chosen). The action runs at zero unless esc cancels it; a duration of 0 runs
+// immediately.
+func (m Model) startCountdown() (tea.Model, tea.Cmd) {
 	m.notice = ""
-	m.countdownPush = push
 	m.countdownN = m.opts.Cfg.CountdownSeconds()
 	if m.countdownN <= 0 {
 		return m.runCountdownAction()
@@ -548,25 +564,17 @@ func (m Model) startCountdown(push bool) (tea.Model, tea.Cmd) {
 	return m, tickCountdown()
 }
 
-// runCountdownAction fires the pending commit or push once the countdown ends.
+// runCountdownAction creates the commit once the countdown ends; the push (if
+// chosen) follows in onCommitted.
 func (m Model) runCountdownAction() (tea.Model, tea.Cmd) {
-	m.step = stepBusy
-	if m.countdownPush {
-		m.busyMsg = "Pushing"
-		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
-	}
 	m.busyMsg = "Creating commit"
+	m.step = stepBusy
 	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
 }
 
-// cancelCountdown aborts the pending action. Cancelling a commit returns to the
-// panels; cancelling a push finishes (the commit already happened).
+// cancelCountdown aborts the pending commit/push and returns to the panels.
 func (m Model) cancelCountdown() (tea.Model, tea.Cmd) {
-	if m.countdownPush {
-		m.step = stepDone
-		return m, tea.Quit
-	}
-	m.notice = "Commit cancelled."
+	m.notice = "Cancelled."
 	m.step = stepMain
 	return m, nil
 }
@@ -586,8 +594,8 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// cancelModal closes an edit/review popup and returns to the panel layout,
-// discarding any in-progress edit.
+// cancelModal closes a popup and returns to the panels. Cancelling the push
+// prompt aborts the whole commit (nothing has run yet).
 func (m Model) cancelModal() (tea.Model, tea.Cmd) {
 	m.form = nil
 	m.editField = ""
@@ -603,6 +611,11 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		return m.completeReview()
 	case stepEdit:
 		return m.completeEdit()
+	case stepPush:
+		// Record the push choice, then count down before committing.
+		m.willPush = m.form.GetBool(keyConfirm)
+		m.form = nil
+		return m.startCountdown()
 	}
 	return m, nil
 }
@@ -664,7 +677,7 @@ func (m Model) View() tea.View {
 	switch m.step {
 	case stepMain:
 		return tea.NewView(m.viewMain())
-	case stepEdit, stepReview:
+	case stepEdit, stepReview, stepPush:
 		return tea.NewView(m.viewFormModal())
 	case stepModal:
 		return tea.NewView(m.viewErrorModal())
@@ -717,11 +730,13 @@ func (m Model) formModalBox() string {
 	return m.styles.popup(m.styles.primary, body)
 }
 
-// modalTitle is the heading shown at the top of an edit/review popup.
+// modalTitle is the heading shown at the top of an edit/review/push popup.
 func (m Model) modalTitle() string {
 	switch m.step {
 	case stepReview:
 		return "Edit commit"
+	case stepPush:
+		return "Push"
 	case stepEdit:
 		switch m.editField {
 		case keyHint:
@@ -753,14 +768,11 @@ func (m Model) viewErrorModal() string {
 	return composeOverlay(m.viewMain(), box, m.width, m.height)
 }
 
-// countdownView renders the abortable pre-commit / pre-push countdown.
+// countdownView renders the abortable pre-commit/push countdown.
 func (m Model) countdownView() string {
 	action := "Committing"
-	if m.countdownPush {
-		action = "Pushing"
-		if m.branch != "" {
-			action += " " + m.branch
-		}
+	if m.willPush {
+		action = "Committing & pushing"
 	}
 	headline := m.styles.previewT.Render(fmt.Sprintf("%s in %d…", action, m.countdownN))
 	hint := m.styles.subtle.Render("press [esc] to cancel")
@@ -1102,6 +1114,8 @@ func stepLabel(s step) string {
 		return "edit"
 	case stepCountdown:
 		return "confirm"
+	case stepPush:
+		return "push"
 	case stepDone:
 		return "done"
 	case stepError:

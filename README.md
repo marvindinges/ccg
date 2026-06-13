@@ -127,16 +127,19 @@ counter is shown next to it.
 | `r` | (Re)generate from the diff via a hint prompt (only when AI is configured) |
 | `e` | Edit everything in one form |
 | `y` | Copy the commit message to the clipboard |
-| `c` | Create the commit |
+| `c` / `enter` | Commit (asks whether to push, then counts down) |
 
 Editing any field opens a **popup modal**: type the value, `enter` to submit,
 `esc` to cancel. Multi-line body/footers take `alt+enter` (or `ctrl+j`) for a
 newline within the field. The **Footers** field takes one trailer per line, e.g.
 `Refs: #123`.
 
-**Commit & push are abortable.** Both run after a 5-second countdown — press `esc`
-during it to cancel (cancelling a push keeps the commit). Clipboard copy uses
-`wl-copy`, `xclip`, `xsel`, `pbcopy`, or `clip.exe`, whichever is available.
+**Commit/push are abortable.** Pressing `c` (or `enter`) first asks whether to
+push (unless `--push`/`--no-push` is set), then runs a countdown (default 3s, set
+`countdown_seconds`; `0` runs immediately) before committing and pushing. Press
+`esc` during the countdown to cancel the whole thing — nothing is committed or
+pushed. Clipboard copy (`y`) uses `wl-copy`, `xclip`, `xsel`, `pbcopy`, or
+`clip.exe`, whichever is available.
 
 Global keys everywhere: `tab` switch panel · `q` quit · `ctrl+c` abort (nothing
 is committed).
