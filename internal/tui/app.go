@@ -674,27 +674,31 @@ func (m Model) completeEdit() (tea.Model, tea.Cmd) {
 // ── View ─────────────────────────────────────────────────────────────────────
 
 func (m Model) View() tea.View {
+	var content string
 	switch m.step {
 	case stepMain:
-		return tea.NewView(m.viewMain())
+		content = m.viewMain()
 	case stepEdit, stepReview, stepPush:
-		return tea.NewView(m.viewFormModal())
+		content = m.viewFormModal()
 	case stepModal:
-		return tea.NewView(m.viewErrorModal())
+		content = m.viewErrorModal()
 	case stepCountdown:
-		return tea.NewView(m.centered(m.countdownView()))
+		content = m.centered(m.countdownView())
 	case stepBusy:
-		return tea.NewView(m.centered(m.styles.loading(m.frame, m.busyMsg)))
+		content = m.centered(m.styles.loading(m.frame, m.busyMsg))
 	case stepDone:
-		return tea.NewView(m.centered(m.styles.success.Render("✓ Done.")))
+		content = m.centered(m.styles.success.Render("✓ Done."))
 	case stepError:
-		body := ""
 		if m.err != nil {
-			body = m.styles.errBox.Render("Error: " + m.err.Error())
+			content = m.centered(m.styles.errBox.Render("Error: " + m.err.Error()))
 		}
-		return tea.NewView(m.centered(body))
 	}
-	return tea.NewView("")
+	v := tea.NewView(content)
+	// Render in the alternate screen buffer: a clean full-screen canvas, so the
+	// full-height panel layout never overflows and scrolls the top off (as it
+	// did inline, e.g. in the VS Code terminal). Restored on exit.
+	v.AltScreen = true
+	return v
 }
 
 // viewFormModal overlays the active huh form as a centered popup on top of the
