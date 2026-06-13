@@ -58,6 +58,23 @@ ccg upgrade v0.2.0     # build a specific tag/branch/commit
 rebuilds, and replaces the current binary. Re-running the install script does the
 same thing. (If ccg was installed another way, re-run the install command above.)
 
+### Uninstall
+
+```sh
+ccg uninstall          # remove ccg (asks once first)
+ccg uninstall -y       # remove without the confirmation prompt
+```
+
+`ccg uninstall` runs the uninstaller from the source checkout: it removes the
+binary, the source checkout (`~/.local/share/ccg`), and the global config
+(`~/.config/ccg`). It **keeps the Go toolchain** and leaves your shell rc files
+untouched (remove the `# Added by ccg installer` PATH line yourself if you want).
+If ccg was installed another way, run the uninstaller directly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/marvindinges/ccg/main/uninstall.sh | sh
+```
+
 ### Manual install
 
 Requires Go 1.21+ (the toolchain auto-fetches the version pinned in `go.mod`) and `git`.
@@ -96,6 +113,7 @@ Subcommands:
 ccg config        # show resolved config and where each value came from
 ccg config path   # print the global and project config file paths
 ccg upgrade       # pull the latest source and rebuild (see Upgrade below)
+ccg uninstall     # remove ccg, its source checkout, and config (see Uninstall below)
 ccg version
 ```
 
