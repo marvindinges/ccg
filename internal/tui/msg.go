@@ -5,9 +5,10 @@ import (
 	"github.com/marvindinges/ccg/internal/git"
 )
 
-// statusMsg carries the result of loading git status.
+// statusMsg carries the result of loading git status (and the current branch).
 type statusMsg struct {
-	files []git.FileStatus
+	files  []git.FileStatus
+	branch string
 }
 
 // stagedMsg signals that selected files were staged and carries the diff.
@@ -40,3 +41,11 @@ type errMsg struct {
 
 // animMsg drives the loading animation tick.
 type animMsg struct{}
+
+// countdownMsg ticks the abortable pre-commit / pre-push countdown (once a second).
+type countdownMsg struct{}
+
+// copiedMsg reports the result of copying the commit message to the clipboard.
+type copiedMsg struct {
+	err error
+}

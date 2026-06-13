@@ -101,6 +101,20 @@ func newStyles(primary, secondary color.Color) styles {
 	}
 }
 
+// headerLenColor returns the color for a header of length n against the limit
+// max: green when comfortably short (≤50), yellow once it grows past 50, red
+// once it exceeds the configured maximum.
+func headerLenColor(n, max int) color.Color {
+	switch {
+	case n > max:
+		return colRed
+	case n > 50:
+		return colYell
+	default:
+		return colGreen
+	}
+}
+
 // brailleFrames drives the spinner glyph.
 var brailleFrames = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 

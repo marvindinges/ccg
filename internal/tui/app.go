@@ -37,12 +37,12 @@ type aiClient interface {
 type step int
 
 const (
-	stepBusy   step = iota // status load / commit / push (full-screen spinner)
-	stepMain               // vertical accordion panel layout
-	stepEdit               // single-field huh form overlay (from a panel)
-	stepReview             // full multi-field huh form (via 'e')
-	stepModal              // dismissable AI-failure overlay
-	stepPush               // push-confirmation huh form
+	stepBusy      step = iota // status load / commit / push (full-screen spinner)
+	stepMain                  // vertical accordion panel layout
+	stepEdit                  // single-field huh form overlay (from a panel)
+	stepReview                // full multi-field huh form (via 'e')
+	stepModal                 // dismissable AI-failure overlay
+	stepCountdown             // abortable 5s countdown before commit/push
 	stepDone
 	stepError
 )
@@ -82,9 +82,10 @@ type Model struct {
 	generating bool
 	busyMsg    string
 
-	hint  string
-	diff  string // current staged diff (refreshed as files are staged/unstaged)
-	draft commit.Commit
+	hint   string
+	branch string // current git branch (sent to the AI for context)
+	diff   string // current staged diff (refreshed as files are staged/unstaged)
+	draft  commit.Commit
 
 	width     int
 	height    int
@@ -92,6 +93,10 @@ type Model struct {
 	editField string
 
 	activePanel panel
+
+	// Abortable countdown before a commit or push.
+	countdownN    int
+	countdownPush bool // false = pending commit, true = pending push
 
 	notice    string
 	modalText string
@@ -198,6 +203,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.aborted = true
 			return m, tea.Quit
 		}
+		if m.step == stepCountdown {
+			if msg.String() == "esc" {
+				return m.cancelCountdown()
+			}
+			return m, nil
+		}
 		if m.step == stepMain {
 			return m.handleMainKey(msg.String())
 		}
@@ -207,7 +218,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activePanel = panelEditor
 			return m, nil
 		}
-		// esc closes an open edit/review/push popup without quitting the app.
+		// esc closes an open edit/review popup without quitting the app.
 		if hasForm(m.step) && msg.String() == "esc" {
 			return m.cancelModal()
 		}
@@ -232,6 +243,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case committedMsg:
 		return m.onCommitted()
+
+	case countdownMsg:
+		if m.step != stepCountdown {
+			return m, nil
+		}
+		m.countdownN--
+		if m.countdownN > 0 {
+			return m, tickCountdown()
+		}
+		return m.runCountdownAction()
+
+	case copiedMsg:
+		if msg.err != nil {
+			m.notice = "Copy failed: " + msg.err.Error()
+		} else {
+			m.notice = "Copied git commit command to clipboard."
+		}
+		return m, nil
 
 	case pushedMsg:
 		m.pushed = true
@@ -259,11 +288,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func hasForm(s step) bool {
-	return s == stepReview || s == stepEdit || s == stepPush
+	return s == stepReview || s == stepEdit
 }
 
 func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
 	m.files = msg.files
+	m.branch = msg.branch
 	if len(m.files) == 0 {
 		m.err = fmt.Errorf("no changes to commit")
 		m.step = stepError
@@ -346,6 +376,7 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 	in := ai.SuggestInput{
 		Diff:         m.diff,
 		Hint:         m.hint,
+		Branch:       m.branch,
 		Types:        m.opts.Cfg.AllowedTypes(),
 		MaxHeaderLen: m.opts.Cfg.MaxHeaderLen(),
 	}
@@ -454,6 +485,8 @@ func (m Model) handleEditorPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
 		m.step = stepReview
 		return m, m.form.Init()
+	case "y":
+		return m, copyToClipboard(m.draft)
 	case "c":
 		return m.commitFromMain()
 	}
@@ -489,9 +522,7 @@ func (m Model) commitFromMain() (tea.Model, tea.Cmd) {
 		m.step = stepDone
 		return m, tea.Quit
 	}
-	m.busyMsg = "Creating commit"
-	m.step = stepBusy
-	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
+	return m.startCountdown(false) // commit
 }
 
 func (m Model) onCommitted() (tea.Model, tea.Cmd) {
@@ -500,15 +531,44 @@ func (m Model) onCommitted() (tea.Model, tea.Cmd) {
 		m.step = stepDone
 		return m, tea.Quit
 	}
-	if m.opts.AutoPush {
+	return m.startCountdown(true) // push
+}
+
+// startCountdown enters the abortable window before a commit (push=false) or a
+// push (push=true). The action runs when it reaches zero unless esc cancels it.
+// A configured duration of 0 skips the countdown and runs the action at once.
+func (m Model) startCountdown(push bool) (tea.Model, tea.Cmd) {
+	m.notice = ""
+	m.countdownPush = push
+	m.countdownN = m.opts.Cfg.CountdownSeconds()
+	if m.countdownN <= 0 {
+		return m.runCountdownAction()
+	}
+	m.step = stepCountdown
+	return m, tickCountdown()
+}
+
+// runCountdownAction fires the pending commit or push once the countdown ends.
+func (m Model) runCountdownAction() (tea.Model, tea.Cmd) {
+	m.step = stepBusy
+	if m.countdownPush {
 		m.busyMsg = "Pushing"
-		m.step = stepBusy
 		return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
 	}
-	branch, _ := m.opts.Git.CurrentBranch()
-	m.form = m.styleForm(newPushForm(branch))
-	m.step = stepPush
-	return m, m.form.Init()
+	m.busyMsg = "Creating commit"
+	return m, tea.Batch(tickAnim(), doCommit(m.opts.Git, m.draft))
+}
+
+// cancelCountdown aborts the pending action. Cancelling a commit returns to the
+// panels; cancelling a push finishes (the commit already happened).
+func (m Model) cancelCountdown() (tea.Model, tea.Cmd) {
+	if m.countdownPush {
+		m.step = stepDone
+		return m, tea.Quit
+	}
+	m.notice = "Commit cancelled."
+	m.step = stepMain
+	return m, nil
 }
 
 func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -526,13 +586,9 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// cancelModal closes an edit/review/push popup and returns to the panel layout,
-// discarding any in-progress edit. Cancelling the push prompt finishes instead.
+// cancelModal closes an edit/review popup and returns to the panel layout,
+// discarding any in-progress edit.
 func (m Model) cancelModal() (tea.Model, tea.Cmd) {
-	if m.step == stepPush {
-		m.step = stepDone
-		return m, tea.Quit
-	}
 	m.form = nil
 	m.editField = ""
 	m.notice = ""
@@ -547,14 +603,6 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		return m.completeReview()
 	case stepEdit:
 		return m.completeEdit()
-	case stepPush:
-		if m.form.GetBool(keyConfirm) {
-			m.busyMsg = "Pushing"
-			m.step = stepBusy
-			return m, tea.Batch(tickAnim(), doPush(m.opts.Git))
-		}
-		m.step = stepDone
-		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -616,10 +664,12 @@ func (m Model) View() tea.View {
 	switch m.step {
 	case stepMain:
 		return tea.NewView(m.viewMain())
-	case stepEdit, stepReview, stepPush:
+	case stepEdit, stepReview:
 		return tea.NewView(m.viewFormModal())
 	case stepModal:
 		return tea.NewView(m.viewErrorModal())
+	case stepCountdown:
+		return tea.NewView(m.centered(m.countdownView()))
 	case stepBusy:
 		return tea.NewView(m.centered(m.styles.loading(m.frame, m.busyMsg)))
 	case stepDone:
@@ -667,13 +717,11 @@ func (m Model) formModalBox() string {
 	return m.styles.popup(m.styles.primary, body)
 }
 
-// modalTitle is the heading shown at the top of an edit/review/push popup.
+// modalTitle is the heading shown at the top of an edit/review popup.
 func (m Model) modalTitle() string {
 	switch m.step {
 	case stepReview:
 		return "Edit commit"
-	case stepPush:
-		return "Push"
 	case stepEdit:
 		switch m.editField {
 		case keyHint:
@@ -703,6 +751,20 @@ func (m Model) viewErrorModal() string {
 		return box
 	}
 	return composeOverlay(m.viewMain(), box, m.width, m.height)
+}
+
+// countdownView renders the abortable pre-commit / pre-push countdown.
+func (m Model) countdownView() string {
+	action := "Committing"
+	if m.countdownPush {
+		action = "Pushing"
+		if m.branch != "" {
+			action += " " + m.branch
+		}
+	}
+	headline := m.styles.previewT.Render(fmt.Sprintf("%s in %d…", action, m.countdownN))
+	hint := m.styles.subtle.Render("press [esc] to cancel")
+	return headline + "\n\n" + hint
 }
 
 // centered places body in the middle of the screen (used for full-screen
@@ -885,24 +947,34 @@ func (m Model) renderEditorPanel(active bool, innerW, innerH int) (string, strin
 	}
 
 	preview, placeholder := m.editorPreview()
+	header := preview
+	if i := strings.IndexByte(header, '\n'); i >= 0 {
+		header = header[:i]
+	}
+	max := m.opts.Cfg.MaxHeaderLen()
+	hlen := lipgloss.Width(header)
+	lenStyle := lipgloss.NewStyle().Foreground(headerLenColor(hlen, max))
 
 	if !active {
-		line := preview
-		if i := strings.IndexByte(line, '\n'); i >= 0 {
-			line = line[:i]
-		}
-		line = clipLine(line, innerW)
+		line := clipLine(header, innerW)
 		if placeholder {
 			return title, m.styles.subtle.Render(line)
 		}
-		return title, m.styles.editorNormal.Render(line)
+		return title, lenStyle.Render(line)
 	}
 
-	content := wrapClip(preview, innerW, innerH)
 	if placeholder {
-		content = m.styles.subtle.Render(content)
+		return title, m.styles.subtle.Render(wrapClip(preview, innerW, innerH))
 	}
-	return title, content
+
+	// Color the header by length and show a "len/max" counter; render the rest
+	// (body, footers) plainly beneath it.
+	counter := lenStyle.Render(fmt.Sprintf("  %d/%d", hlen, max))
+	out := lenStyle.Render(header) + counter
+	if i := strings.IndexByte(preview, '\n'); i >= 0 {
+		out += preview[i:] // the remaining lines, unchanged
+	}
+	return title, wrapClip(out, innerW, innerH)
 }
 
 // editorPreview returns the commit message to show in the Commit panel. When the
@@ -975,6 +1047,7 @@ func (m Model) mainFooter() string {
 			}
 			pk = append(pk,
 				m.styles.key("e", "edit all"),
+				m.styles.key("y", "copy cmd"),
 				m.styles.key("c", "commit"),
 			)
 		}
@@ -1027,8 +1100,8 @@ func stepLabel(s step) string {
 		return "edit all"
 	case stepEdit:
 		return "edit"
-	case stepPush:
-		return "push"
+	case stepCountdown:
+		return "confirm"
 	case stepDone:
 		return "done"
 	case stepError:

@@ -166,6 +166,47 @@ func TestStrictSchemaEnv(t *testing.T) {
 	}
 }
 
+func TestEnvKnobsForEveryOption(t *testing.T) {
+	setupGlobal(t, "")
+	t.Setenv("CCG_PRIMARY_COLOR", "cyan")
+	t.Setenv("CCG_SECONDARY_COLOR", "121")
+	t.Setenv("CCG_MAX_HEADER_LEN", "60")
+	t.Setenv("CCG_COUNTDOWN_SECONDS", "0")
+	t.Setenv("CCG_DEFAULTS", "false")
+	t.Setenv("CCG_TYPES", "build:Build system; perf:Perf improvements")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PrimaryColor() != "cyan" || cfg.SecondaryColor() != "121" {
+		t.Errorf("colors not overridden: %q / %q", cfg.PrimaryColor(), cfg.SecondaryColor())
+	}
+	if cfg.MaxHeaderLen() != 60 {
+		t.Errorf("max_header_len = %d, want 60", cfg.MaxHeaderLen())
+	}
+	if cfg.CountdownSeconds() != 0 {
+		t.Errorf("countdown = %d, want 0", cfg.CountdownSeconds())
+	}
+	// defaults=false + custom types => only the custom types.
+	types := cfg.AllowedTypes()
+	if len(types) != 2 || types[0].Name != "build" || types[1].Name != "perf" {
+		t.Errorf("CCG_TYPES not applied: %+v", types)
+	}
+	if types[1].Description != "Perf improvements" {
+		t.Errorf("type description trimmed wrong: %q", types[1].Description)
+	}
+	if cfg.Source("countdown_seconds") != "env" || cfg.Source("colors.primary") != "env" {
+		t.Error("env sources not recorded")
+	}
+}
+
+func TestCountdownDefault(t *testing.T) {
+	if (Config{}).CountdownSeconds() != DefaultCountdownSeconds {
+		t.Errorf("default countdown = %d, want %d", (Config{}).CountdownSeconds(), DefaultCountdownSeconds)
+	}
+}
+
 func TestAPIKeyResolution(t *testing.T) {
 	t.Setenv("MY_KEY", "abc123")
 	cfg := Config{Provider: ProviderConfig{APIKeyEnv: "MY_KEY"}}

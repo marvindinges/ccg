@@ -48,8 +48,11 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  provider.base_url     = %s [%s]\n", orNone(cfg.Provider.BaseURL), cfg.Source("provider.base_url"))
 	fmt.Printf("  provider.model        = %s [%s]\n", orNone(cfg.Provider.Model), cfg.Source("provider.model"))
 	fmt.Printf("  provider.api_key_env  = %s [%s]\n", orNone(cfg.Provider.APIKeyEnv), cfg.Source("provider.api_key_env"))
-	fmt.Printf("  provider.strict_schema= %t\n", cfg.Provider.StrictSchema)
-	fmt.Printf("  commit.max_header_len = %d\n", cfg.MaxHeaderLen())
+	fmt.Printf("  provider.strict_schema= %t [%s]\n", cfg.Provider.StrictSchema, cfg.Source("provider.strict_schema"))
+	fmt.Printf("  commit.max_header_len = %d [%s]\n", cfg.MaxHeaderLen(), cfg.Source("commit.max_header_len"))
+	fmt.Printf("  countdown_seconds     = %d [%s]\n", cfg.CountdownSeconds(), cfg.Source("countdown_seconds"))
+	fmt.Printf("  colors.primary        = %s [%s]\n", cfg.PrimaryColor(), cfg.Source("colors.primary"))
+	fmt.Printf("  colors.secondary      = %s [%s]\n", cfg.SecondaryColor(), cfg.Source("colors.secondary"))
 
 	keyState := "not set"
 	if cfg.Provider.APIKeyEnv != "" {

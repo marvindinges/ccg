@@ -42,6 +42,17 @@ func TestUserPromptIncludesDiffAndHint(t *testing.T) {
 	}
 }
 
+func TestUserPromptIncludesBranch(t *testing.T) {
+	p := userPrompt(SuggestInput{Diff: "x", Branch: "feature/login"})
+	if !strings.Contains(p, "feature/login") {
+		t.Error("user prompt should include the branch name for context")
+	}
+	// No branch => no branch line.
+	if strings.Contains(userPrompt(SuggestInput{Diff: "x"}), "Current git branch") {
+		t.Error("unexpected branch line when no branch provided")
+	}
+}
+
 func TestTruncateDiff(t *testing.T) {
 	big := strings.Repeat("a", maxDiffBytes+500)
 	got := truncateDiff(big)

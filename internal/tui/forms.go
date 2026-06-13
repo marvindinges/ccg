@@ -31,7 +31,6 @@ const (
 	keyDesc     = "description"
 	keyBody     = "body"
 	keyFooters  = "footers"
-	keyConfirm  = "confirm"
 )
 
 // newStageForm builds the file-selection step. Files already staged (or all
@@ -194,16 +193,6 @@ func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType
 		group = huh.NewGroup(huh.NewNote().Title("Nothing to edit"))
 	}
 	return huh.NewForm(group)
-}
-
-// newPushForm asks whether to push now.
-func newPushForm(branch string) *huh.Form {
-	v := false
-	c := huh.NewConfirm().
-		Key(keyConfirm).
-		Title(fmt.Sprintf("Push %q now?", branch)).
-		Value(&v)
-	return huh.NewForm(huh.NewGroup(c))
 }
 
 // footersToText renders footers as one "Token: value" per line.

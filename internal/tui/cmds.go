@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marvindinges/ccg/internal/ai"
+	"github.com/marvindinges/ccg/internal/clip"
 	"github.com/marvindinges/ccg/internal/commit"
 )
 
@@ -17,14 +19,37 @@ func tickAnim() tea.Cmd {
 	return tea.Tick(animInterval, func(time.Time) tea.Msg { return animMsg{} })
 }
 
-// loadStatus fetches the working-tree status.
+// tickCountdown schedules the next one-second countdown tick.
+func tickCountdown() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return countdownMsg{} })
+}
+
+// copyToClipboard copies the full `git commit` command (message included) to the
+// system clipboard, so it can be pasted and run directly.
+func copyToClipboard(c commit.Commit) tea.Cmd {
+	return func() tea.Msg {
+		return copiedMsg{err: clip.Copy(gitCommitCommand(c))}
+	}
+}
+
+// gitCommitCommand renders a ready-to-run `git commit -m '…'` command. The
+// message is wrapped in single quotes with embedded single quotes escaped, so it
+// pastes safely into a POSIX shell even when multi-line.
+func gitCommitCommand(c commit.Commit) string {
+	msg := strings.TrimRight(c.Render(), "\n")
+	escaped := strings.ReplaceAll(msg, "'", `'\''`)
+	return "git commit -m '" + escaped + "'"
+}
+
+// loadStatus fetches the working-tree status and the current branch name.
 func loadStatus(g gitRunner) tea.Cmd {
 	return func() tea.Msg {
 		files, err := g.Status()
 		if err != nil {
 			return errMsg{err}
 		}
-		return statusMsg{files: files}
+		branch, _ := g.CurrentBranch() // best-effort; empty on detached HEAD
+		return statusMsg{files: files, branch: branch}
 	}
 }
 

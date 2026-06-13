@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/marvindinges/ccg/internal/commit"
 	"gopkg.in/yaml.v3"
@@ -22,6 +23,10 @@ const (
 	DefaultPrimaryColor   = "bright-blue"
 	DefaultSecondaryColor = "bright-magenta"
 )
+
+// DefaultCountdownSeconds is the abortable delay before a commit/push. 0 disables
+// the countdown (the action runs immediately).
+const DefaultCountdownSeconds = 3
 
 // ProviderConfig describes an OpenAI-compatible chat-completions endpoint.
 // A single generic client covers OpenAI, OpenRouter, Groq, LM Studio,
@@ -62,6 +67,9 @@ type Config struct {
 	// UseDefaults includes the built-in commit types (git-cm `defaults = true`).
 	// Defaults to true when unset in YAML (see Load).
 	UseDefaults *bool `yaml:"defaults"`
+	// Countdown is the abortable delay (seconds) before a commit/push. nil =>
+	// default; 0 disables the countdown.
+	Countdown *int `yaml:"countdown_seconds"`
 
 	// sources records where each top-level value was resolved from, for
 	// `ccg config`. Not serialized.
@@ -104,6 +112,15 @@ func (c Config) MaxHeaderLen() int {
 		return *c.Commit.MaxHeaderLen
 	}
 	return commit.DefaultMaxHeaderLen
+}
+
+// CountdownSeconds returns the abortable pre-commit/push delay in seconds (0
+// means no countdown).
+func (c Config) CountdownSeconds() int {
+	if c.Countdown != nil && *c.Countdown >= 0 {
+		return *c.Countdown
+	}
+	return DefaultCountdownSeconds
 }
 
 // AllowedTypes returns the effective commit type set: built-in defaults
@@ -178,38 +195,101 @@ func mergeFile(cfg *Config, path, source string) error {
 	return nil
 }
 
-// recordSources marks which provider fields this layer set.
+// recordSources marks which fields this file layer changed.
 func recordSources(cfg *Config, before Config, source string) {
-	if cfg.Provider.BaseURL != before.Provider.BaseURL {
-		cfg.sources["provider.base_url"] = source
+	mark := func(key string, changed bool) {
+		if changed {
+			cfg.sources[key] = source
+		}
 	}
-	if cfg.Provider.Model != before.Provider.Model {
-		cfg.sources["provider.model"] = source
-	}
-	if cfg.Provider.APIKeyEnv != before.Provider.APIKeyEnv {
-		cfg.sources["provider.api_key_env"] = source
-	}
+	mark("provider.base_url", cfg.Provider.BaseURL != before.Provider.BaseURL)
+	mark("provider.model", cfg.Provider.Model != before.Provider.Model)
+	mark("provider.api_key_env", cfg.Provider.APIKeyEnv != before.Provider.APIKeyEnv)
+	mark("provider.strict_schema", cfg.Provider.StrictSchema != before.Provider.StrictSchema)
+	mark("colors.primary", cfg.Colors.Primary != before.Colors.Primary)
+	mark("colors.secondary", cfg.Colors.Secondary != before.Colors.Secondary)
+	mark("commit.max_header_len", !eqIntPtr(cfg.Commit.MaxHeaderLen, before.Commit.MaxHeaderLen))
+	mark("commit.types", len(cfg.Commit.Types) != len(before.Commit.Types))
+	mark("defaults", !eqBoolPtr(cfg.UseDefaults, before.UseDefaults))
+	mark("countdown_seconds", !eqIntPtr(cfg.Countdown, before.Countdown))
 }
 
-// applyEnv applies CCG_* environment overrides.
+// applyEnv applies CCG_* environment overrides. There is a knob for every
+// global config option.
 func applyEnv(cfg *Config) {
-	if v, ok := os.LookupEnv("CCG_BASE_URL"); ok {
-		cfg.Provider.BaseURL = v
-		cfg.sources["provider.base_url"] = "env"
+	setStr := func(env, key string, dst *string) {
+		if v, ok := os.LookupEnv(env); ok {
+			*dst = v
+			cfg.sources[key] = "env"
+		}
 	}
-	if v, ok := os.LookupEnv("CCG_MODEL"); ok {
-		cfg.Provider.Model = v
-		cfg.sources["provider.model"] = "env"
-	}
-	if v, ok := os.LookupEnv("CCG_API_KEY_ENV"); ok {
-		cfg.Provider.APIKeyEnv = v
-		cfg.sources["provider.api_key_env"] = "env"
-	}
+	setStr("CCG_BASE_URL", "provider.base_url", &cfg.Provider.BaseURL)
+	setStr("CCG_MODEL", "provider.model", &cfg.Provider.Model)
+	setStr("CCG_API_KEY_ENV", "provider.api_key_env", &cfg.Provider.APIKeyEnv)
+	setStr("CCG_PRIMARY_COLOR", "colors.primary", &cfg.Colors.Primary)
+	setStr("CCG_SECONDARY_COLOR", "colors.secondary", &cfg.Colors.Secondary)
+
 	if v, ok := os.LookupEnv("CCG_STRICT_SCHEMA"); ok {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Provider.StrictSchema = b
+			cfg.sources["provider.strict_schema"] = "env"
 		}
 	}
+	if v, ok := os.LookupEnv("CCG_DEFAULTS"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.UseDefaults = &b
+			cfg.sources["defaults"] = "env"
+		}
+	}
+	if v, ok := os.LookupEnv("CCG_MAX_HEADER_LEN"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Commit.MaxHeaderLen = &n
+			cfg.sources["commit.max_header_len"] = "env"
+		}
+	}
+	if v, ok := os.LookupEnv("CCG_COUNTDOWN_SECONDS"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Countdown = &n
+			cfg.sources["countdown_seconds"] = "env"
+		}
+	}
+	if v, ok := os.LookupEnv("CCG_TYPES"); ok {
+		cfg.Commit.Types = parseTypes(v)
+		cfg.sources["commit.types"] = "env"
+	}
+}
+
+// parseTypes parses CCG_TYPES, a list of "name:description" pairs separated by
+// ";", e.g. "build:Build system changes;perf:Performance improvements".
+func parseTypes(s string) []commit.CommitType {
+	var out []commit.CommitType
+	for _, part := range strings.Split(s, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, desc, _ := strings.Cut(part, ":")
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, commit.CommitType{Name: name, Description: strings.TrimSpace(desc)})
+	}
+	return out
+}
+
+func eqIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func eqBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // Source returns where a dotted config key was resolved from ("global",

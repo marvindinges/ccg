@@ -39,6 +39,7 @@ const conventionalCommitsSpec = `Conventional Commits 1.0.0 — the rules a mess
 type SuggestInput struct {
 	Diff         string
 	Hint         string
+	Branch       string // current git branch, for extra context (may be empty)
 	Types        []commit.CommitType
 	MaxHeaderLen int
 }
@@ -89,6 +90,11 @@ Now output the single JSON object for the diff the user provides.`, conventional
 func userPrompt(in SuggestInput) string {
 	diff := truncateDiff(in.Diff)
 	var b strings.Builder
+	if branch := strings.TrimSpace(in.Branch); branch != "" {
+		b.WriteString("Current git branch (may hint at the change's intent or a ticket id): ")
+		b.WriteString(branch)
+		b.WriteString("\n\n")
+	}
 	b.WriteString("Here is the staged git diff:\n\n")
 	b.WriteString(diff)
 	if strings.TrimSpace(in.Hint) != "" {

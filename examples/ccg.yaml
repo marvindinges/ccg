@@ -2,13 +2,20 @@
 #
 # Place a global version at ~/.config/ccg/config.yaml, and/or a per-project
 # version named .ccg.yaml at your repository root (project overrides global).
-# Environment variables (CCG_BASE_URL, CCG_MODEL, CCG_API_KEY_ENV,
-# CCG_STRICT_SCHEMA) override both.
+#
+# Every option below has a CCG_* environment variable that overrides it:
+#   CCG_BASE_URL, CCG_MODEL, CCG_API_KEY_ENV, CCG_STRICT_SCHEMA,
+#   CCG_PRIMARY_COLOR, CCG_SECONDARY_COLOR, CCG_MAX_HEADER_LEN,
+#   CCG_COUNTDOWN_SECONDS, CCG_DEFAULTS, and CCG_TYPES ("name:desc;name:desc").
 #
 # Omit the whole `provider:` block to run ccg in fully manual mode (no AI).
 
 # Include the built-in commit types (feat, fix, docs, ...). Default: true.
 defaults: true
+
+# Abortable countdown (seconds) before a commit or push; press esc to cancel.
+# Default: 3. Set to 0 to commit/push immediately with no countdown.
+countdown_seconds: 3
 
 provider:
   # Any OpenAI-compatible /chat/completions endpoint.
