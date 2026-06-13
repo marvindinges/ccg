@@ -6,7 +6,9 @@
 #   - the ccg binary            (default ~/.local/bin/ccg)
 #   - the source clone          (default ~/.local/share/ccg)
 #   - the global config         (~/.config/ccg)
-#   - the PATH lines the installer added to your bash/zsh/fish rc files
+#
+# It leaves your shell rc files untouched (the installer's PATH lines are
+# harmless and may be shared with other tools — remove them yourself if needed).
 #
 # It asks ONE confirmation before doing anything. Run it the same way as install:
 #   curl -fsSL https://raw.githubusercontent.com/marvindinges/ccg/main/uninstall.sh | sh
@@ -16,7 +18,6 @@
 #   CCG_SRC_DIR       where the source clone lives    (default ~/.local/share/ccg/src)
 #   CCG_GO_DIR        the Go toolchain dir to KEEP    (default ~/.local/go)
 #   CCG_ASSUME_YES=1  answer yes to the confirmation (non-interactive)
-#   CCG_SKIP_PATH=1   do not touch shell rc files
 
 set -eu
 
@@ -68,35 +69,6 @@ BIN="$INSTALL_DIR/ccg"
 DATA_DIR=$(dirname "$SRC_DIR")
 
 # ---------------------------------------------------------------------------
-# strip_path_lines <rcfile> — remove the "# Added by ccg installer" block (the
-# comment, its export/fish_add_path lines, and a preceding blank line).
-# ---------------------------------------------------------------------------
-strip_path_lines() {
-	_file="$1"
-	[ -f "$_file" ] || return 0
-	grep -qF "# Added by ccg installer" "$_file" 2>/dev/null || return 0
-
-	_tmp="$_file.ccg.tmp"
-	awk '
-		$0 == "# Added by ccg installer" {
-			if (held_set && held == "") { held_set = 0 }  # drop the leading blank
-			skip = 1
-			next
-		}
-		skip == 1 {
-			if ($0 ~ /^export PATH=/ || $0 ~ /^fish_add_path /) next
-			skip = 0
-		}
-		{
-			if (held_set) print held
-			held = $0; held_set = 1
-		}
-		END { if (held_set) print held }
-	' "$_file" >"$_tmp" && mv "$_tmp" "$_file"
-	info "  cleaned $_file"
-}
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 step "ccg uninstaller"
@@ -105,11 +77,7 @@ info "This will remove (the Go toolchain at ${c_bold}$GO_DIR${c_off} is kept):"
 [ -e "$BIN" ]        && info "  • binary       $BIN"        || info "  ${c_dim}• binary       $BIN (not found)$c_off"
 [ -d "$DATA_DIR" ]   && info "  • source clone $DATA_DIR"   || info "  ${c_dim}• source clone $DATA_DIR (not found)$c_off"
 [ -d "$CONFIG_DIR" ] && info "  • config       $CONFIG_DIR" || info "  ${c_dim}• config       $CONFIG_DIR (not found)$c_off"
-if [ "${CCG_SKIP_PATH:-0}" = "1" ]; then
-	info "  ${c_dim}• PATH lines   (skipped: CCG_SKIP_PATH=1)$c_off"
-else
-	info "  • PATH lines   in your bash/zsh/fish rc files"
-fi
+info "  ${c_dim}• PATH lines in your shell rc files are left untouched$c_off"
 info ""
 
 if ! ask "Remove ccg and its config now?"; then
@@ -128,17 +96,11 @@ if [ -d "$CONFIG_DIR" ]; then
 	rm -rf "$CONFIG_DIR" && info "  removed $CONFIG_DIR"
 fi
 
-if [ "${CCG_SKIP_PATH:-0}" != "1" ]; then
-	step "Cleaning PATH entries"
-	strip_path_lines "$HOME/.bashrc"
-	strip_path_lines "${ZDOTDIR:-$HOME}/.zshrc"
-	strip_path_lines "$HOME/.config/fish/config.fish"
-fi
-
 info ""
 step "Done — ccg removed."
 if [ -d "$GO_DIR" ]; then
 	info "Left the Go toolchain at $GO_DIR untouched. Remove it yourself if it was"
 	info "installed only for ccg:  rm -rf $GO_DIR  (and its PATH line, if any)."
 fi
-info "Open a new shell (or re-source your rc file) for PATH changes to take effect."
+info "The ccg PATH line in your shell rc files was left as-is; remove it manually"
+info "if you like (look for the '# Added by ccg installer' comment)."

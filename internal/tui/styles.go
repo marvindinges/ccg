@@ -144,7 +144,10 @@ func (s styles) loading(frame int, label string) string {
 			b.WriteString(dim.Render(string(r)))
 		}
 	}
-	dots := strings.Repeat(".", frame%4)
+	// Animate 0–3 trailing dots, but pad to a constant 3-cell width so the line
+	// width never changes — otherwise a centered loader jitters left/right.
+	n := frame % 4
+	dots := strings.Repeat(".", n) + strings.Repeat(" ", 3-n)
 	return sp + " " + b.String() + dim.Render(dots)
 }
 
