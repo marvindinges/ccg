@@ -25,8 +25,16 @@
 #   CCG_PROVIDER_BASE_URL    pre-fill provider base_url for config setup
 #   CCG_PROVIDER_MODEL       pre-fill provider model
 #   CCG_PROVIDER_API_KEY_ENV pre-fill the name of the API-key env var
+#   CCG_STRICT_SCHEMA        pre-fill provider strict_schema (default false)
 #   CCG_PRIMARY_COLOR        pre-fill the primary accent color (default bright-blue)
 #   CCG_SECONDARY_COLOR      pre-fill the secondary accent color (default bright-magenta)
+#   CCG_MAX_HEADER_LEN       pre-fill commit max_header_len (default 72)
+#   CCG_COUNTDOWN_SECONDS    pre-fill the commit/push countdown (default 3, 0 disables)
+#   CCG_DEFAULTS             pre-fill whether to include built-in commit types (default true)
+#   CCG_TYPES                pre-fill custom commit types ("name:desc;name:desc")
+#
+# Every one of these config knobs is also honored at runtime as a CCG_* env var
+# overriding the resolved config (see `ccg config`).
 
 set -eu
 
@@ -375,9 +383,17 @@ setup_config() {
 	primary=$(prompt_value "Primary color" "${CCG_PRIMARY_COLOR:-bright-blue}")
 	secondary=$(prompt_value "Secondary color" "${CCG_SECONDARY_COLOR:-bright-magenta}")
 
+	# Advanced options are taken from env knobs (with sensible defaults) rather
+	# than prompted for, so a scripted install can pre-fill every config value.
+	strict_schema="${CCG_STRICT_SCHEMA:-false}"
+	use_defaults="${CCG_DEFAULTS:-true}"
+	max_header_len="${CCG_MAX_HEADER_LEN:-72}"
+	countdown="${CCG_COUNTDOWN_SECONDS:-3}"
+
 	mkdir -p "$CONFIG_DIR"
 	{
-		echo "defaults: true"
+		echo "defaults: $use_defaults"
+		echo "countdown_seconds: $countdown"
 		if [ -n "$base_url" ]; then
 			echo "provider:"
 			echo "  base_url: $base_url"
@@ -385,13 +401,13 @@ setup_config() {
 			if [ -n "$key_env" ]; then
 				echo "  api_key_env: $key_env"
 			fi
-			echo "  strict_schema: false"
+			echo "  strict_schema: $strict_schema"
 		fi
 		echo "colors:"
 		echo "  primary: $primary"
 		echo "  secondary: $secondary"
 		echo "commit:"
-		echo "  max_header_len: 72"
+		echo "  max_header_len: $max_header_len"
 	} >"$CONFIG_FILE"
 	info "Wrote $CONFIG_FILE"
 	if [ -n "$key_env" ]; then
