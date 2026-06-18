@@ -159,6 +159,12 @@ push (unless `--push`/`--no-push` is set), then runs a countdown (default 3s, se
 pushed. Clipboard copy (`y`) uses `wl-copy`, `xclip`, `xsel`, `pbcopy`, or
 `clip.exe`, whichever is available.
 
+**SSH passphrase prompt.** If the first push attempt fails because your SSH key
+needs a passphrase (and no agent has it loaded), ccg shows a masked input field
+so you can type the passphrase directly in the TUI instead of the push hanging
+indefinitely. Press `esc` on the passphrase prompt to skip the push while keeping
+the commit.
+
 Global keys everywhere: `tab` switch panel · `q` quit · `ctrl+c` abort (nothing
 is committed).
 
@@ -177,6 +183,7 @@ environment variable, and ccg reads the key from your environment at runtime.
 ```yaml
 defaults: true            # include the built-in commit types
 countdown_seconds: 3      # abortable delay before commit/push (0 = no countdown)
+no_push: false            # set true to always skip the push step (same as --no-push)
 provider:
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
@@ -231,6 +238,7 @@ single run (precedence: env > project > global > defaults):
 | `CCG_MAX_HEADER_LEN` | `commit.max_header_len` (int) |
 | `CCG_COUNTDOWN_SECONDS` | `countdown_seconds` (int) |
 | `CCG_DEFAULTS` | `defaults` (bool) |
+| `CCG_NO_PUSH` | `no_push` (bool) |
 | `CCG_TYPES` | `commit.types`, as `"name:desc;name:desc"` |
 
 `ccg config` prints each resolved value and where it came from (`default`,
