@@ -70,6 +70,8 @@ type Config struct {
 	// Countdown is the abortable delay (seconds) before a commit/push. nil =>
 	// default; 0 disables the countdown.
 	Countdown *int `yaml:"countdown_seconds"`
+	// NoPush skips the push step entirely, same as --no-push on the CLI.
+	NoPush *bool `yaml:"no_push"`
 
 	// sources records where each top-level value was resolved from, for
 	// `ccg config`. Not serialized.
@@ -121,6 +123,11 @@ func (c Config) CountdownSeconds() int {
 		return *c.Countdown
 	}
 	return DefaultCountdownSeconds
+}
+
+// NoPushEnabled reports whether the config disables the push step.
+func (c Config) NoPushEnabled() bool {
+	return c.NoPush != nil && *c.NoPush
 }
 
 // AllowedTypes returns the effective commit type set: built-in defaults
@@ -212,6 +219,7 @@ func recordSources(cfg *Config, before Config, source string) {
 	mark("commit.types", len(cfg.Commit.Types) != len(before.Commit.Types))
 	mark("defaults", !eqBoolPtr(cfg.UseDefaults, before.UseDefaults))
 	mark("countdown_seconds", !eqIntPtr(cfg.Countdown, before.Countdown))
+	mark("no_push", !eqBoolPtr(cfg.NoPush, before.NoPush))
 }
 
 // applyEnv applies CCG_* environment overrides. There is a knob for every
@@ -251,6 +259,12 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Countdown = &n
 			cfg.sources["countdown_seconds"] = "env"
+		}
+	}
+	if v, ok := os.LookupEnv("CCG_NO_PUSH"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.NoPush = &b
+			cfg.sources["no_push"] = "env"
 		}
 	}
 	if v, ok := os.LookupEnv("CCG_TYPES"); ok {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -46,9 +47,15 @@ func NewInDir(dir string) (*Runner, error) {
 // stdout. Stderr is folded into the returned error. The environment is forced
 // to a deterministic, lock-light configuration for stable parsing on WSL.
 func (r *Runner) run(ctx context.Context, stdin string, args ...string) (string, error) {
+	return r.runWithEnv(ctx, nil, stdin, args...)
+}
+
+// runWithEnv is like run but appends extra environment variables on top of the
+// base environment. Later values override earlier ones for duplicate keys.
+func (r *Runner) runWithEnv(ctx context.Context, extraEnv []string, stdin string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, r.git, args...)
 	cmd.Dir = r.Dir
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(append(os.Environ(), "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0"), extraEnv...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -161,15 +168,63 @@ func (r *Runner) HasUpstream() (bool, error) {
 
 // Push pushes the current branch. When setUpstream is true (no upstream yet),
 // it runs `git push -u origin <branch>`.
+//
+// Push is non-interactive: it sets GIT_TERMINAL_PROMPT=0 and uses SSH
+// BatchMode so the subprocess never hangs waiting for user input. If SSH
+// needs a passphrase, the push fails fast with a "Permission denied" error
+// instead of blocking indefinitely.
 func (r *Runner) Push(setUpstream bool) error {
+	env := []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH_COMMAND=ssh -o BatchMode=yes",
+	}
 	if !setUpstream {
-		_, err := r.run(context.Background(), "", "push")
+		_, err := r.runWithEnv(context.Background(), env, "", "push")
 		return err
 	}
 	branch, err := r.CurrentBranch()
 	if err != nil {
 		return err
 	}
-	_, err = r.run(context.Background(), "", "push", "-u", "origin", branch)
+	_, err = r.runWithEnv(context.Background(), env, "", "push", "-u", "origin", branch)
+	return err
+}
+
+// PushWithPassphrase pushes the current branch using the given passphrase to
+// unlock SSH keys via SSH_ASKPASS, so the user never has to type it in a
+// terminal that doesn't support interactive input.
+func (r *Runner) PushWithPassphrase(setUpstream bool, passphrase string) error {
+	dir, err := os.MkdirTemp("", "ccg-ssh-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	ppFile := filepath.Join(dir, "pp")
+	if err := os.WriteFile(ppFile, []byte(passphrase), 0600); err != nil {
+		return fmt.Errorf("write passphrase file: %w", err)
+	}
+
+	scriptFile := filepath.Join(dir, "askpass")
+	script := "#!/bin/sh\ncat " + ppFile + "\n"
+	if err := os.WriteFile(scriptFile, []byte(script), 0700); err != nil { //nolint:gosec
+		return fmt.Errorf("write askpass script: %w", err)
+	}
+
+	env := []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"SSH_ASKPASS=" + scriptFile,
+		"SSH_ASKPASS_REQUIRE=force", // OpenSSH 8.4+: use askpass without a display
+		"DISPLAY=:0",               // older OpenSSH: trigger askpass mode
+	}
+	if !setUpstream {
+		_, err = r.runWithEnv(context.Background(), env, "", "push")
+		return err
+	}
+	branch, err := r.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	_, err = r.runWithEnv(context.Background(), env, "", "push", "-u", "origin", branch)
 	return err
 }

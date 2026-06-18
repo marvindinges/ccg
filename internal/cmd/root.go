@@ -81,8 +81,9 @@ func run(cmd *cobra.Command, args []string) error {
 		Hint:      flagHint,
 		SelectAll: flagAll,
 		AutoPush:  flagPush,
-		NoPush:    flagNoPush,
-		DryRun:    flagDryRun,
+		// --no-push flag OR config no_push=true; --push flag overrides config.
+		NoPush: flagNoPush || (cfg.NoPushEnabled() && !flagPush),
+		DryRun: flagDryRun,
 	}
 
 	// Only attach an AI client when a provider is configured and not disabled.

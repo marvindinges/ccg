@@ -26,6 +26,7 @@ type gitRunner interface {
 	HasStagedChanges() (bool, error)
 	Commit(message string) error
 	Push(setUpstream bool) error
+	PushWithPassphrase(setUpstream bool, passphrase string) error
 	HasUpstream() (bool, error)
 	CurrentBranch() (string, error)
 }
@@ -37,13 +38,14 @@ type aiClient interface {
 type step int
 
 const (
-	stepBusy      step = iota // status load / commit / push (full-screen spinner)
-	stepMain                  // vertical accordion panel layout
-	stepEdit                  // single-field huh form overlay (from a panel)
-	stepReview                // full multi-field huh form (via 'e')
-	stepModal                 // dismissable AI-failure overlay
-	stepCountdown             // abortable countdown before the commit
-	stepPush                  // push-confirmation modal (decide whether to push)
+	stepBusy           step = iota // status load / commit / push (full-screen spinner)
+	stepMain                       // vertical accordion panel layout
+	stepEdit                       // single-field huh form overlay (from a panel)
+	stepReview                     // full multi-field huh form (via 'e')
+	stepModal                      // dismissable AI-failure overlay
+	stepCountdown                  // abortable countdown before the commit
+	stepPush                       // push-confirmation modal (decide whether to push)
+	stepSSHPassphrase              // SSH key passphrase input after push auth failure
 	stepDone
 	stepError
 )
@@ -102,11 +104,12 @@ type Model struct {
 	notice    string
 	modalText string
 
-	committed       bool
-	pushed          bool
-	pushSetUpstream bool
-	aborted         bool
-	err             error
+	committed          bool
+	pushed             bool
+	pushSetUpstream    bool
+	pushUpstreamNeeded bool // saved across the passphrase prompt for retry
+	aborted            bool
+	err                error
 }
 
 // New builds the initial model.
@@ -263,6 +266,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case sshPassphraseNeededMsg:
+		m.pushUpstreamNeeded = msg.setUpstream
+		m.form = m.styleForm(newPassphraseForm())
+		m.step = stepSSHPassphrase
+		return m, m.form.Init()
+
 	case pushedMsg:
 		m.pushed = true
 		m.pushSetUpstream = msg.setUpstream
@@ -289,7 +298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func hasForm(s step) bool {
-	return s == stepReview || s == stepEdit || s == stepPush
+	return s == stepReview || s == stepEdit || s == stepPush || s == stepSSHPassphrase
 }
 
 func (m Model) onStatus(msg statusMsg) (tea.Model, tea.Cmd) {
@@ -595,8 +604,15 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // cancelModal closes a popup and returns to the panels. Cancelling the push
-// prompt aborts the whole commit (nothing has run yet).
+// prompt aborts the whole commit (nothing has run yet). Cancelling the SSH
+// passphrase prompt skips push but keeps the commit (it already landed).
 func (m Model) cancelModal() (tea.Model, tea.Cmd) {
+	if m.step == stepSSHPassphrase {
+		m.form = nil
+		m.committed = true
+		m.step = stepDone
+		return m, tea.Quit
+	}
 	m.form = nil
 	m.editField = ""
 	m.notice = ""
@@ -616,6 +632,12 @@ func (m Model) onFormComplete() (tea.Model, tea.Cmd) {
 		m.willPush = m.form.GetBool(keyConfirm)
 		m.form = nil
 		return m.startCountdown()
+	case stepSSHPassphrase:
+		passphrase := m.form.GetString(keyPassphrase)
+		m.form = nil
+		m.busyMsg = "Pushing"
+		m.step = stepBusy
+		return m, tea.Batch(tickAnim(), doPushWithPassphrase(m.opts.Git, m.pushUpstreamNeeded, passphrase))
 	}
 	return m, nil
 }
@@ -678,7 +700,7 @@ func (m Model) View() tea.View {
 	switch m.step {
 	case stepMain:
 		content = m.viewMain()
-	case stepEdit, stepReview, stepPush:
+	case stepEdit, stepReview, stepPush, stepSSHPassphrase:
 		content = m.viewFormModal()
 	case stepModal:
 		content = m.viewErrorModal()
@@ -741,6 +763,8 @@ func (m Model) modalTitle() string {
 		return "Edit commit"
 	case stepPush:
 		return "Push"
+	case stepSSHPassphrase:
+		return "SSH passphrase required"
 	case stepEdit:
 		switch m.editField {
 		case keyHint:
@@ -1120,6 +1144,8 @@ func stepLabel(s step) string {
 		return "confirm"
 	case stepPush:
 		return "push"
+	case stepSSHPassphrase:
+		return "ssh passphrase"
 	case stepDone:
 		return "done"
 	case stepError:

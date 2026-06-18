@@ -32,8 +32,9 @@ func (f *fakeGit) Unstage(p []string) error          { f.unstaged = append(f.uns
 func (f *fakeGit) StagedDiff() (string, error)       { return f.diff, nil }
 func (f *fakeGit) HasStagedChanges() (bool, error)   { return f.diff != "", nil }
 func (f *fakeGit) Commit(msg string) error           { f.committed = msg; return f.commitErr }
-func (f *fakeGit) Push(set bool) error               { f.pushed = true; f.setUpstream = set; return nil }
-func (f *fakeGit) HasUpstream() (bool, error)        { return f.hasUpstream, nil }
+func (f *fakeGit) Push(set bool) error                         { f.pushed = true; f.setUpstream = set; return nil }
+func (f *fakeGit) PushWithPassphrase(set bool, _ string) error { f.pushed = true; f.setUpstream = set; return nil }
+func (f *fakeGit) HasUpstream() (bool, error)                  { return f.hasUpstream, nil }
 func (f *fakeGit) CurrentBranch() (string, error)    { return "main", nil }
 
 type fakeAI struct {

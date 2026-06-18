@@ -45,6 +45,12 @@ type animMsg struct{}
 // countdownMsg ticks the abortable pre-commit / pre-push countdown (once a second).
 type countdownMsg struct{}
 
+// sshPassphraseNeededMsg signals the push failed with an SSH auth error,
+// prompting the user to enter their SSH key passphrase for a retry.
+type sshPassphraseNeededMsg struct {
+	setUpstream bool
+}
+
 // copiedMsg reports the result of copying the commit message to the clipboard.
 type copiedMsg struct {
 	err error

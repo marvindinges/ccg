@@ -23,15 +23,16 @@ func formWidth(termWidth int) int {
 
 // Form field keys.
 const (
-	keyFiles    = "files"
-	keyHint     = "hint"
-	keyType     = "type"
-	keyScope    = "scope"
-	keyBreaking = "breaking"
-	keyDesc     = "description"
-	keyBody     = "body"
-	keyFooters  = "footers"
-	keyConfirm  = "confirm"
+	keyFiles      = "files"
+	keyHint       = "hint"
+	keyType       = "type"
+	keyScope      = "scope"
+	keyBreaking   = "breaking"
+	keyDesc       = "description"
+	keyBody       = "body"
+	keyFooters    = "footers"
+	keyConfirm    = "confirm"
+	keyPassphrase = "passphrase"
 )
 
 // newStageForm builds the file-selection step. Files already staged (or all
@@ -194,6 +195,17 @@ func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType
 		group = huh.NewGroup(huh.NewNote().Title("Nothing to edit"))
 	}
 	return huh.NewForm(group)
+}
+
+// newPassphraseForm collects an SSH key passphrase (masked input).
+func newPassphraseForm() *huh.Form {
+	v := ""
+	f := huh.NewInput().
+		Key(keyPassphrase).
+		Title("SSH key passphrase").
+		EchoMode(huh.EchoModePassword).
+		Value(&v)
+	return huh.NewForm(huh.NewGroup(f))
 }
 
 // newPushForm asks whether to push now.

@@ -11,6 +11,15 @@ import (
 	"github.com/marvindinges/ccg/internal/commit"
 )
 
+// isSSHAuthError reports whether err looks like an SSH public-key auth failure.
+// When Push runs with BatchMode=yes, a missing/locked key produces this error
+// instead of hanging indefinitely waiting for a passphrase prompt.
+func isSSHAuthError(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "Permission denied") &&
+		(strings.Contains(s, "publickey") || strings.Contains(s, "public key"))
+}
+
 // animInterval is the loading-animation frame interval.
 const animInterval = 90 * time.Millisecond
 
@@ -92,7 +101,10 @@ func doCommit(g gitRunner, c commit.Commit) tea.Cmd {
 	}
 }
 
-// doPush pushes the current branch, setting upstream when needed.
+// doPush pushes the current branch, setting upstream when needed. If Push
+// fails with an SSH auth error (key locked, no agent), it returns
+// sshPassphraseNeededMsg instead of a fatal error so the TUI can ask for the
+// passphrase and retry.
 func doPush(g gitRunner) tea.Cmd {
 	return func() tea.Msg {
 		hasUpstream, err := g.HasUpstream()
@@ -101,6 +113,19 @@ func doPush(g gitRunner) tea.Cmd {
 		}
 		setUpstream := !hasUpstream
 		if err := g.Push(setUpstream); err != nil {
+			if isSSHAuthError(err) {
+				return sshPassphraseNeededMsg{setUpstream: setUpstream}
+			}
+			return errMsg{err}
+		}
+		return pushedMsg{setUpstream: setUpstream}
+	}
+}
+
+// doPushWithPassphrase retries the push using an SSH passphrase.
+func doPushWithPassphrase(g gitRunner, setUpstream bool, passphrase string) tea.Cmd {
+	return func() tea.Msg {
+		if err := g.PushWithPassphrase(setUpstream, passphrase); err != nil {
 			return errMsg{err}
 		}
 		return pushedMsg{setUpstream: setUpstream}
