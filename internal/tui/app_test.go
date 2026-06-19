@@ -728,7 +728,7 @@ func TestViewDoesNotPanicAcrossSteps(t *testing.T) {
 	m.width = 120
 	m.height = 40
 	m.draft = commit.Commit{Type: "feat", Scope: "ui", Description: "x"}
-	m.form = m.styleForm(newReviewForm(m.draft, commit.DefaultTypes()))
+	m.form = m.styleForm(newReviewForm(m.draft, commit.DefaultTypes(), nil, false))
 	for _, s := range []step{stepBusy, stepMain, stepEdit, stepReview, stepCountdown, stepDone, stepError} {
 		m.step = s
 		if s == stepError {

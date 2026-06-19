@@ -6,7 +6,8 @@
 # Every option below has a CCG_* environment variable that overrides it:
 #   CCG_BASE_URL, CCG_MODEL, CCG_API_KEY_ENV, CCG_STRICT_SCHEMA,
 #   CCG_PRIMARY_COLOR, CCG_SECONDARY_COLOR, CCG_MAX_HEADER_LEN,
-#   CCG_COUNTDOWN_SECONDS, CCG_DEFAULTS, and CCG_TYPES ("name:desc;name:desc").
+#   CCG_COUNTDOWN_SECONDS, CCG_DEFAULTS, CCG_TYPES ("name:desc;name:desc"),
+#   CCG_NO_PUSH (bool), CCG_SCOPES ("api;auth;db"), CCG_STRICT_SCOPES (bool).
 #
 # Omit the whole `provider:` block to run ccg in fully manual mode (no AI).
 
@@ -16,6 +17,9 @@ defaults: true
 # Abortable countdown (seconds) before a commit or push; press esc to cancel.
 # Default: 3. Set to 0 to commit/push immediately with no countdown.
 countdown_seconds: 3
+
+# Always skip the push step (same as --no-push on every run). Default: false.
+no_push: false
 
 provider:
   # Any OpenAI-compatible /chat/completions endpoint.
@@ -42,3 +46,13 @@ commit:
   types:
     - name: infra
       description: Infrastructure / Terraform changes
+  # Pre-defined scopes for this project. When set, the AI is told to prefer
+  # these scopes. In the TUI the scope field shows them as a hint (free input)
+  # or as an enforced drop-down picker when strict_scopes is true.
+  # scopes:
+  #   - api
+  #   - auth
+  #   - db
+  #   - ui
+  # Restrict scope entry to the list above. Default: false (advisory only).
+  # strict_scopes: false

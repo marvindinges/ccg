@@ -69,8 +69,9 @@ func newHintForm(preset string) *huh.Form {
 }
 
 // newReviewForm builds the commit-editing step, pre-populated from draft. Every
-// segment is editable. allowed drives the type picker.
-func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
+// segment is editable. allowed drives the type picker; scopes/strictScopes
+// control whether the scope field is a free-form input or a restricted select.
+func newReviewForm(draft commit.Commit, allowed []commit.CommitType, scopes []string, strictScopes bool) *huh.Form {
 	typeOpts := make([]huh.Option[string], 0, len(allowed))
 	for _, t := range allowed {
 		typeOpts = append(typeOpts, huh.NewOption(fmt.Sprintf("%s — %s", t.Name, t.Description), t.Name))
@@ -94,17 +95,7 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 		Height(6).
 		Value(&typeVal)
 
-	scope := huh.NewInput().
-		Key(keyScope).
-		Title("Scope (optional)").
-		Placeholder("component or area").
-		Value(&scopeVal).
-		Validate(func(s string) error {
-			if strings.ContainsAny(s, " \t)") {
-				return fmt.Errorf("scope must not contain spaces or ')'")
-			}
-			return nil
-		})
+	scope := newScopeField(keyScope, &scopeVal, scopes, strictScopes)
 
 	breaking := huh.NewConfirm().
 		Key(keyBreaking).
@@ -147,10 +138,46 @@ func newReviewForm(draft commit.Commit, allowed []commit.CommitType) *huh.Form {
 	)
 }
 
+// newScopeField returns a huh field for the scope. When scopes are configured
+// and strict_scopes is true it renders as a Select (enforced list); when scopes
+// are configured but not strict it renders as a free-form Input with the
+// available scopes shown as a description hint; otherwise it is a plain Input.
+func newScopeField(key string, val *string, scopes []string, strict bool) huh.Field {
+	if len(scopes) > 0 && strict {
+		opts := []huh.Option[string]{huh.NewOption("(none)", "")}
+		for _, s := range scopes {
+			opts = append(opts, huh.NewOption(s, s))
+		}
+		return huh.NewSelect[string]().Key(key).Title("Scope").Options(opts...).Height(min(len(opts)+2, 10)).Value(val)
+	}
+	in := huh.NewInput().Key(key).Title("Scope (optional)").Value(val).
+		Validate(func(s string) error {
+			if strings.ContainsAny(s, " \t)") {
+				return fmt.Errorf("scope must not contain spaces or ')'")
+			}
+			if strict && len(scopes) > 0 && s != "" {
+				allowed := make(map[string]bool, len(scopes))
+				for _, sc := range scopes {
+					allowed[sc] = true
+				}
+				if !allowed[s] {
+					return fmt.Errorf("scope must be one of: %s", strings.Join(scopes, ", "))
+				}
+			}
+			return nil
+		})
+	if len(scopes) > 0 {
+		in = in.Description("available: " + strings.Join(scopes, ", "))
+	} else {
+		in = in.Placeholder("component or area")
+	}
+	return in
+}
+
 // newFieldForm builds a single-field form for editing one segment of the commit
 // from the summary screen, pre-filled from draft. The returned form's value is
 // read back via the matching key on completion.
-func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType) *huh.Form {
+func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType, scopes []string, strictScopes bool) *huh.Form {
 	var group *huh.Group
 	switch field {
 	case keyType:
@@ -165,14 +192,7 @@ func newFieldForm(field string, draft commit.Commit, allowed []commit.CommitType
 		group = huh.NewGroup(huh.NewSelect[string]().Key(keyType).Title("Type").Options(opts...).Height(8).Value(&v))
 	case keyScope:
 		v := draft.Scope
-		group = huh.NewGroup(huh.NewInput().Key(keyScope).Title("Scope (optional)").
-			Placeholder("component or area").Value(&v).
-			Validate(func(s string) error {
-				if strings.ContainsAny(s, " \t)") {
-					return fmt.Errorf("scope must not contain spaces or ')'")
-				}
-				return nil
-			}))
+		group = huh.NewGroup(newScopeField(keyScope, &v, scopes, strictScopes))
 	case keyDesc:
 		v := draft.Description
 		group = huh.NewGroup(huh.NewInput().Key(keyDesc).Title("Short description").

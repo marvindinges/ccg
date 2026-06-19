@@ -42,6 +42,8 @@ type SuggestInput struct {
 	Branch       string // current git branch, for extra context (may be empty)
 	Types        []commit.CommitType
 	MaxHeaderLen int
+	Scopes       []string // pre-defined scopes from config (may be empty)
+	StrictScopes bool     // when true, only Scopes values are allowed
 }
 
 // systemPrompt instructs the model to emit a single JSON object describing the
@@ -59,6 +61,8 @@ func systemPrompt(in SuggestInput) string {
 		maxLen = commit.DefaultMaxHeaderLen
 	}
 
+	scopeInstruction := scopePrompt(in.Scopes, in.StrictScopes)
+
 	return fmt.Sprintf(`You write a Conventional Commits message describing staged code changes, given a git diff.
 
 %s
@@ -69,7 +73,7 @@ The JSON object captures the parts of a Conventional Commit defined above.
 
 The JSON object has these fields:
 - "type" (string, required): the change type. Choose exactly one value from the allowed list below.
-- "scope" (string): a short noun for the affected area, or "" if none.
+- "scope" (string): %s
 - "description" (string, required): a concise summary in the imperative mood
   ("add", not "added"/"adds"); no trailing period. Keep the whole header
   "type(scope): description" within %d characters.
@@ -83,7 +87,20 @@ Allowed values for "type":
 Example of a valid response (structure only — describe the ACTUAL diff, do not copy this):
 {"type":"fix","scope":"parser","description":"handle empty input","body":"","breaking":false,"breaking_description":"","footers":[]}
 
-Now output the single JSON object for the diff the user provides.`, conventionalCommitsSpec, maxLen, types.String())
+Now output the single JSON object for the diff the user provides.`, conventionalCommitsSpec, scopeInstruction, maxLen, types.String())
+}
+
+// scopePrompt returns the "scope" field description for the system prompt,
+// incorporating pre-defined scopes when the config provides them.
+func scopePrompt(scopes []string, strict bool) string {
+	if len(scopes) == 0 {
+		return `a short noun for the affected area, or "" if none.`
+	}
+	list := `"` + strings.Join(scopes, `", "`) + `"`
+	if strict {
+		return fmt.Sprintf(`the affected area. You MUST use one of the following values (or "" for no scope): %s.`, list)
+	}
+	return fmt.Sprintf(`the affected area. Prefer one of the following values when appropriate: %s. Use "" if none fits.`, list)
 }
 
 // userPrompt provides the diff and optional human hint.

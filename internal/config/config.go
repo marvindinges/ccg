@@ -57,6 +57,13 @@ type CommitConfig struct {
 	Types []commit.CommitType `yaml:"types"`
 	// MaxHeaderLen is the recommended header length limit. nil => default.
 	MaxHeaderLen *int `yaml:"max_header_len"`
+	// Scopes is a list of pre-defined scope names for the project.
+	// When present the AI is told to prefer these scopes and the scope edit
+	// field shows them as options (enforced when StrictScopes is true).
+	Scopes []string `yaml:"scopes"`
+	// StrictScopes restricts scope entry to the pre-defined list above.
+	// nil / false => the list is advisory only (free-form input still allowed).
+	StrictScopes *bool `yaml:"strict_scopes"`
 }
 
 // Config is the merged configuration.
@@ -128,6 +135,15 @@ func (c Config) CountdownSeconds() int {
 // NoPushEnabled reports whether the config disables the push step.
 func (c Config) NoPushEnabled() bool {
 	return c.NoPush != nil && *c.NoPush
+}
+
+// AllowedScopes returns the configured scope list (may be nil/empty).
+func (c Config) AllowedScopes() []string { return c.Commit.Scopes }
+
+// StrictScopesEnabled reports whether scope entry is restricted to the
+// pre-defined list (strict_scopes: true in config).
+func (c Config) StrictScopesEnabled() bool {
+	return c.Commit.StrictScopes != nil && *c.Commit.StrictScopes
 }
 
 // AllowedTypes returns the effective commit type set: built-in defaults
@@ -217,6 +233,8 @@ func recordSources(cfg *Config, before Config, source string) {
 	mark("colors.secondary", cfg.Colors.Secondary != before.Colors.Secondary)
 	mark("commit.max_header_len", !eqIntPtr(cfg.Commit.MaxHeaderLen, before.Commit.MaxHeaderLen))
 	mark("commit.types", len(cfg.Commit.Types) != len(before.Commit.Types))
+	mark("commit.scopes", len(cfg.Commit.Scopes) != len(before.Commit.Scopes))
+	mark("commit.strict_scopes", !eqBoolPtr(cfg.Commit.StrictScopes, before.Commit.StrictScopes))
 	mark("defaults", !eqBoolPtr(cfg.UseDefaults, before.UseDefaults))
 	mark("countdown_seconds", !eqIntPtr(cfg.Countdown, before.Countdown))
 	mark("no_push", !eqBoolPtr(cfg.NoPush, before.NoPush))
@@ -271,6 +289,16 @@ func applyEnv(cfg *Config) {
 		cfg.Commit.Types = parseTypes(v)
 		cfg.sources["commit.types"] = "env"
 	}
+	if v, ok := os.LookupEnv("CCG_SCOPES"); ok {
+		cfg.Commit.Scopes = parseScopes(v)
+		cfg.sources["commit.scopes"] = "env"
+	}
+	if v, ok := os.LookupEnv("CCG_STRICT_SCOPES"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Commit.StrictScopes = &b
+			cfg.sources["commit.strict_scopes"] = "env"
+		}
+	}
 }
 
 // parseTypes parses CCG_TYPES, a list of "name:description" pairs separated by
@@ -288,6 +316,18 @@ func parseTypes(s string) []commit.CommitType {
 			continue
 		}
 		out = append(out, commit.CommitType{Name: name, Description: strings.TrimSpace(desc)})
+	}
+	return out
+}
+
+// parseScopes parses CCG_SCOPES, a semicolon-separated list of scope names,
+// e.g. "api;auth;db".
+func parseScopes(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ";") {
+		if name := strings.TrimSpace(part); name != "" {
+			out = append(out, name)
+		}
 	}
 	return out
 }

@@ -389,6 +389,8 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 		Branch:       m.branch,
 		Types:        m.opts.Cfg.AllowedTypes(),
 		MaxHeaderLen: m.opts.Cfg.MaxHeaderLen(),
+		Scopes:       m.opts.Cfg.AllowedScopes(),
+		StrictScopes: m.opts.Cfg.StrictScopesEnabled(),
 	}
 	return m, tea.Batch(tickAnim(), generate(m.opts.AI, in))
 }
@@ -492,7 +494,7 @@ func (m Model) handleEditorPanelKey(key string) (tea.Model, tea.Cmd) {
 			return m.openFieldEdit(keyHint)
 		}
 	case "e":
-		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
+		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes(), m.opts.Cfg.AllowedScopes(), m.opts.Cfg.StrictScopesEnabled()))
 		m.step = stepReview
 		return m, m.form.Init()
 	case "y":
@@ -515,7 +517,7 @@ func (m Model) openFieldEdit(field string) (tea.Model, tea.Cmd) {
 				Value(&v),
 		))
 	} else {
-		f = newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes())
+		f = newFieldForm(field, m.draft, m.opts.Cfg.AllowedTypes(), m.opts.Cfg.AllowedScopes(), m.opts.Cfg.StrictScopesEnabled())
 	}
 	m.form = m.styleForm(f)
 	m.step = stepEdit
@@ -654,7 +656,7 @@ func (m Model) completeReview() (tea.Model, tea.Cmd) {
 	errs := m.draft.Validate(m.opts.Cfg.AllowedTypes(), m.opts.Cfg.MaxHeaderLen())
 	if commit.HasFatal(errs) {
 		m.notice = "Fix the following before committing:\n" + formatErrors(errs)
-		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes()))
+		m.form = m.styleForm(newReviewForm(m.draft, m.opts.Cfg.AllowedTypes(), m.opts.Cfg.AllowedScopes(), m.opts.Cfg.StrictScopesEnabled()))
 		m.step = stepReview
 		return m, m.form.Init()
 	}

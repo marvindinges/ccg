@@ -204,7 +204,17 @@ commit:
   types:                  # custom types, merged with the defaults
     - name: infra
       description: Infrastructure / Terraform changes
+  scopes:                 # pre-defined scopes for this project
+    - api
+    - auth
+    - db
+    - ui
+  strict_scopes: false    # true = only listed scopes allowed; false = list is advisory
 ```
+
+When `scopes` are defined:
+- The **AI is told to prefer them** (or is restricted to them when `strict_scopes: true`).
+- The **scope edit field** shows the list as a description hint for free-form entry, or as a **drop-down picker** when `strict_scopes: true` (enforced — no arbitrary input).
 
 ### Colors
 
@@ -240,6 +250,8 @@ single run (precedence: env > project > global > defaults):
 | `CCG_DEFAULTS` | `defaults` (bool) |
 | `CCG_NO_PUSH` | `no_push` (bool) |
 | `CCG_TYPES` | `commit.types`, as `"name:desc;name:desc"` |
+| `CCG_SCOPES` | `commit.scopes`, as `"api;auth;db"` |
+| `CCG_STRICT_SCOPES` | `commit.strict_scopes` (bool) |
 
 `ccg config` prints each resolved value and where it came from (`default`,
 `global`, `project`, or `env`).
