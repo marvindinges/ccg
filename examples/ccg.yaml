@@ -49,10 +49,10 @@ commit:
   # Pre-defined scopes for this project. When set, the AI is told to prefer
   # these scopes. In the TUI the scope field shows them as a hint (free input)
   # or as an enforced drop-down picker when strict_scopes is true.
-  # scopes:
-  #   - api
-  #   - auth
-  #   - db
-  #   - ui
+  scopes:
+    - api
+    - auth
+    - db
+    - ui
   # Restrict scope entry to the list above. Default: false (advisory only).
-  # strict_scopes: false
+  strict_scopes: false
